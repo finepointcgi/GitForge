@@ -1,0 +1,237 @@
+@using GitForge.Core.Merge
+@implements IDisposable
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+@inject IDialogService Dialogs
+@inject IJSRuntime JS
+
+<div class="gf-merge">
+    <div class="gf-merge-head">
+        <MudIcon Icon="@Icons.Material.Outlined.CallMerge" Size="Size.Small" Color="Color.Warning" />
+        <strong>Resolve conflicts</strong>
+        @if (_doc is { } d)
+        {
+            <span class="gf-chip @(d.IsFullyResolved ? null : "warn")">@d.ResolvedCount of @d.Conflicts.Count resolved</span>
+            <span class="gf-spacer"></span>
+            <button class="gf-btn gf-btn-ghost" title="Take my side for every conflict" @onclick="@(() => All(ConflictResolution.Ours))">All mine</button>
+            <button class="gf-btn gf-btn-ghost" title="Take their side for every conflict" @onclick="@(() => All(ConflictResolution.Theirs))">All theirs</button>
+            <button class="gf-btn gf-btn-ghost" title="Discard choices and reload from git" @onclick="LoadAsync">Reset</button>
+            <button class="gf-btn gf-btn-ghost" title="Open in your external merge tool" @onclick="LaunchTool">Merge tool…</button>
+            <button class="gf-btn gf-btn-stage" disabled="@(!d.IsFullyResolved || _saving)" title="Ctrl+S" @onclick="SaveAsync">Save and mark resolved</button>
+        }
+        else
+        {
+            <span class="gf-spacer"></span>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+    }
+    else if (_sides is { IsDeleteConflict: true } s)
+    {
+        <div class="gf-merge-empty">
+            <p><strong>@(s.Ours is null ? "You deleted" : "They deleted")</strong> <span class="gf-mono">@Path</span>, while the other side changed it.</p>
+            <div class="gf-conflict-buttons">
+                <button class="gf-btn gf-btn-stage" @onclick="@(() => ResolveDeletion(true))">Keep the file</button>
+                <button class="gf-btn gf-btn-danger" @onclick="@(() => ResolveDeletion(false))">Delete the file</button>
+            </div>
+        </div>
+    }
+    else if (_doc is null)
+    {
+        <ConflictActions Path="@Path" />
+    }
+    else
+    {
+        <div class="gf-scroll gf-merge-body">
+            <p class="gf-dim gf-small gf-merge-help">
+                Pick a side for each conflict: <kbd>m</kbd> mine, <kbd>t</kbd> theirs, <kbd>b</kbd> both; <kbd>n</kbd>/<kbd>p</kbd> next/previous;
+                <kbd>Ctrl+S</kbd> save. Lines outside conflicts were merged automatically.
+            </p>
+            @for (var i = 0; i < _doc.Segments.Count; i++)
+            {
+                var segmentIndex = i;
+                @switch (_doc.Segments[i])
+                {
+                    case MergeCommon common:
+                        var collapsed = common.Lines.Count > 8 && !_expanded.Contains(segmentIndex);
+                        <pre class="gf-merge-common">@(collapsed ? string.Join('\n', common.Lines.Take(3)) : string.Join('\n', common.Lines))</pre>
+                        @if (collapsed)
+                        {
+                            <button class="gf-merge-fold" @onclick="@(() => _expanded.Add(segmentIndex))">⋯ @(common.Lines.Count - 6) unchanged lines</button>
+                            <pre class="gf-merge-common">@string.Join('\n', common.Lines.TakeLast(3))</pre>
+                        }
+                        break;
+
+                    case MergeConflict c:
+                        <div class="gf-merge-card @(c.Index == _current ? "current" : null) @(c.IsResolved ? "resolved" : null)" id="@CardId(c.Index)" @onclick="@(() => _current = c.Index)">
+                            <div class="gf-merge-card-head">
+                                <span class="gf-group-title">Conflict @(c.Index + 1) of @_doc.Conflicts.Count</span>
+                                <span class="gf-chip @(c.IsResolved ? null : "warn")">@Label(c)</span>
+                                <span class="gf-spacer"></span>
+                                @foreach (var (res, text, key) in Choices)
+                                {
+                                    <button class="gf-choice @(c.Resolution == res ? "on" : null)" title="@(key is null ? text : $"{text} ({key})")" @onclick:stopPropagation="true" @onclick="@(() => Choose(c, res))">@text</button>
+                                }
+                                <button class="gf-choice @(c.Resolution == ConflictResolution.Custom ? "on" : null)" title="Edit the result by hand" @onclick:stopPropagation="true" @onclick="@(() => Edit(c))">Edit</button>
+                            </div>
+                            <div class="gf-merge-cols">
+                                <div class="gf-merge-col mine"><div class="gf-merge-col-title">Mine</div><pre>@Lines(c.Ours)</pre></div>
+                                <div class="gf-merge-col base"><div class="gf-merge-col-title">Base</div><pre>@Lines(c.Base)</pre></div>
+                                <div class="gf-merge-col theirs"><div class="gf-merge-col-title">Theirs</div><pre>@Lines(c.Theirs)</pre></div>
+                            </div>
+                            @if (c.Resolution == ConflictResolution.Custom)
+                            {
+                                <div class="gf-merge-result"><div class="gf-merge-col-title">Result (edited)</div>
+                                    <textarea class="gf-input gf-merge-edit" rows="@Math.Clamp((c.CustomText ?? string.Empty).Split('\n').Length + 1, 3, 30)"
+                                              value="@c.CustomText" @oninput="@(e => c.CustomText = e.Value?.ToString())" @onclick:stopPropagation="true" aria-label="Edited result"></textarea>
+                                </div>
+                            }
+                            else if (c.IsResolved)
+                            {
+                                <div class="gf-merge-result"><div class="gf-merge-col-title">Result</div><pre>@Lines(c.ResolvedLines)</pre></div>
+                            }
+                        </div>
+                        break;
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Path { get; set; } = string.Empty;
+
+    private static readonly (ConflictResolution Res, string Text, string? Key)[] Choices =
+    [
+        (ConflictResolution.Ours, "Mine", "m"),
+        (ConflictResolution.Theirs, "Theirs", "t"),
+        (ConflictResolution.OursThenTheirs, "Both", "b"),
+        (ConflictResolution.TheirsThenOurs, "Theirs + mine", null),
+        (ConflictResolution.Base, "Base", null),
+    ];
+
+    private ConflictSides? _sides;
+    private MergeDocument? _doc;
+    private bool _loading, _saving;
+    private int _current;
+    private readonly HashSet<int> _expanded = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Shortcuts.Command += OnCommand;
+        await LoadAsync();
+    }
+
+    private static string CardId(int index) => $"gf-conflict-{index}";
+
+    private static string Lines(IReadOnlyList<string> lines) => lines.Count == 0 ? "(empty)" : string.Join('\n', lines);
+
+    private static string Label(MergeConflict c) => c.Resolution switch
+    {
+        ConflictResolution.Ours => "Mine",
+        ConflictResolution.Theirs => "Theirs",
+        ConflictResolution.OursThenTheirs => "Mine, then theirs",
+        ConflictResolution.TheirsThenOurs => "Theirs, then mine",
+        ConflictResolution.Base => "Base",
+        ConflictResolution.Custom => "Edited",
+        _ => "Unresolved",
+    };
+
+    private async Task LoadAsync()
+    {
+        if (W.Repo is not { } repo) return;
+        _loading = true;
+        _expanded.Clear();
+        _current = 0;
+        try
+        {
+            _sides = await Task.Run(() => repo.Index.GetConflictSidesAsync(Path));
+            var text = _sides.IsDeleteConflict || _sides.IsBinary ? null : await Task.Run(() => repo.Index.GetMergeTextAsync(Path));
+            _doc = text is null ? null : MergeDocument.Parse(text);
+        }
+        catch (Exception ex)
+        {
+            _doc = null;
+            W.Error("Load conflict", ex);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task Choose(MergeConflict c, ConflictResolution res)
+    {
+        c.Resolution = res;
+        _current = c.Index;
+        await MoveToNextUnresolved();
+    }
+
+    private void Edit(MergeConflict c)
+    {
+        c.CustomText ??= c.EditSeed;
+        c.Resolution = ConflictResolution.Custom;
+        _current = c.Index;
+    }
+
+    private void All(ConflictResolution res) => _doc?.ResolveAll(res);
+
+    private async Task MoveToNextUnresolved()
+    {
+        if (_doc is null) return;
+        var next = _doc.Conflicts.Skip(_current + 1).Concat(_doc.Conflicts.Take(_current + 1)).FirstOrDefault(c => !c.IsResolved);
+        if (next is not null) await Focus(next.Index);
+    }
+
+    private async Task Focus(int index)
+    {
+        if (_doc is null || _doc.Conflicts.Count == 0) return;
+        _current = Math.Clamp(index, 0, _doc.Conflicts.Count - 1);
+        StateHasChanged();
+        await JS.InvokeVoidAsync("gitforge.scrollIntoViewById", CardId(_current));
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_doc is not { IsFullyResolved: true } doc || _saving) return;
+        _saving = true;
+        try
+        {
+            var content = doc.Render();
+            await W.RunAsync($"Saving {Path}", (r, _) => r.Index.SaveResolutionAsync(Path, content), $"Resolved {Path}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task ResolveDeletion(bool keep) =>
+        W.RunAsync(keep ? "Keeping file" : "Deleting file", (r, _) => r.Index.ResolveDeletionAsync(Path, keep), keep ? $"Kept {Path}" : $"Deleted {Path}");
+
+    private Task LaunchTool() => W.RunAsync("Waiting for merge tool", async (r, _) =>
+        (await r.Index.LaunchMergeToolAsync(Path, W.Settings.ExternalMergeTool)).EnsureSuccess("mergetool"));
+
+    private async Task OnCommand(string command)
+    {
+        if (_doc is null || W.Center != CenterView.Diff) return;
+        var current = _doc.Conflicts.Count > 0 ? _doc.Conflicts[Math.Clamp(_current, 0, _doc.Conflicts.Count - 1)] : null;
+        switch (command)
+        {
+            case "merge.mine" when current is not null: await Choose(current, ConflictResolution.Ours); break;
+            case "merge.theirs" when current is not null: await Choose(current, ConflictResolution.Theirs); break;
+            case "merge.both" when current is not null: await Choose(current, ConflictResolution.OursThenTheirs); break;
+            case "merge.next" or "nav.down": await Focus(_current + 1); break;
+            case "merge.prev" or "nav.up": await Focus(_current - 1); break;
+            case "merge.save": await SaveAsync(); break;
+            default: return;
+        }
+
+        StateHasChanged();
+    }
+
+    public void Dispose() => Shortcuts.Command -= OnCommand;
+}

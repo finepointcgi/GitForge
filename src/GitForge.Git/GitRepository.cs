@@ -28,6 +28,7 @@ public sealed class GitRepository : IGitRepository
         Stashes = new StashOperations(_ctx, reader);
         History = new HistoryOperations(_ctx);
         Submodules = new SubmoduleOperations(_ctx);
+        Lfs = new LfsOperations(_ctx);
     }
 
     public string WorkingDirectory { get; }
@@ -42,6 +43,7 @@ public sealed class GitRepository : IGitRepository
     public IStashOperations Stashes { get; }
     public IHistoryOperations History { get; }
     public ISubmoduleOperations Submodules { get; }
+    public ILfsOperations Lfs { get; }
 
     public Task<GitResult> RunRawAsync(IReadOnlyList<string> arguments, IProgress<string>? output = null, CancellationToken cancellationToken = default) =>
         _ctx.TryWriteAsync(arguments, cancellationToken, progress: output);

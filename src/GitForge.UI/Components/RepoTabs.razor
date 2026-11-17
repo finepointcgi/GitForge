@@ -1,0 +1,45 @@
+@implements IDisposable
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+
+@if (W.Sessions.Count > 0)
+{
+    <nav class="gf-tabs" aria-label="Open repositories">
+        @foreach (var s in W.Sessions)
+        {
+            var active = s == W.Active;
+            var changes = s.Status.TotalCount;
+            <div class="gf-tab @(active ? "active" : null)" role="tab" aria-selected="@active" title="@s.Path"
+                 @onclick="@(() => W.ActivateAsync(s))" @onmousedown="@(e => OnMouseDown(e, s))" @onmousedown:preventDefault="false">
+                <MudIcon Icon="@Icons.Material.Outlined.Folder" Size="Size.Small" />
+                <span class="gf-ellipsis">@s.Name</span>
+                @if (s.Snapshot?.HeadBranch is { } branch)
+                {
+                    <span class="gf-tab-branch gf-ellipsis">@branch</span>
+                }
+                @if (changes > 0)
+                {
+                    <span class="gf-tab-dot" title="@($"{changes} uncommitted change(s)")"></span>
+                }
+                <button class="gf-tab-close" title="Close tab (Ctrl+W)" aria-label="@($"Close {s.Name}")" @onclick:stopPropagation="true" @onclick="@(() => W.CloseTabAsync(s))">×</button>
+            </div>
+        }
+        <button class="gf-tab-add" title="Open a repository in a new tab (Ctrl+T)" aria-label="Open repository in new tab" @onclick="@(() => Shortcuts.RaiseAsync("repo.open"))">+</button>
+        <span class="gf-spacer"></span>
+        @if (W.Sessions.Count > 1)
+        {
+            <span class="gf-dim gf-small gf-tabs-hint">Ctrl+Tab to switch</span>
+        }
+    </nav>
+}
+
+@code {
+    protected override void OnInitialized() => W.Changed += OnChanged;
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    // Middle-click closes a tab, like a browser.
+    private Task OnMouseDown(MouseEventArgs e, RepoSession s) => e.Button == 1 ? W.CloseTabAsync(s) : Task.CompletedTask;
+
+    public void Dispose() => W.Changed -= OnChanged;
+}

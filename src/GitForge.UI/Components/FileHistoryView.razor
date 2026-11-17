@@ -1,0 +1,110 @@
+@implements IDisposable
+@inject RepoWorkspace W
+
+<div class="gf-fileview">
+    <div class="gf-diffpane-head">
+        <button class="gf-back" @onclick="W.ShowGraph" title="Back to graph (Esc)"><MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Size="Size.Small" /> Graph</button>
+        <MudIcon Icon="@Icons.Material.Outlined.History" Size="Size.Small" />
+        <span class="gf-mono gf-ellipsis gf-grow" title="@_path">@_path</span>
+        <span class="gf-chip">@(_loading ? "loading…" : $"{_entries.Count} commit{(_entries.Count == 1 ? string.Empty : "s")}")</span>
+        @if (_selected is { } sel)
+        {
+            <button class="gf-btn gf-btn-ghost" title="Who changed each line, as of this commit" @onclick="@(() => W.ShowBlame(sel.Path, sel.Commit.Sha))">Blame here</button>
+            <button class="gf-btn gf-btn-ghost" @onclick="@(() => { W.ShowGraph(); W.SelectCommit(sel.Commit.Sha, reveal: true); })">Show in graph</button>
+        }
+        <button class="gf-btn gf-btn-ghost" @onclick="@(() => W.ShowBlame(_path))">Blame (working tree)</button>
+    </div>
+    <div class="gf-split-x gf-grow-pane" id="gf-filehistory">
+        <div class="gf-pane">
+            <div class="gf-scroll">
+                <Virtualize Items="_entries" ItemSize="44" Context="e">
+                    <div class="gf-history-row @(e == _selected ? "selected" : null)" @onclick="@(() => SelectAsync(e))">
+                        <Avatar Name="@e.Commit.AuthorName" Email="@e.Commit.AuthorEmail" Small="true" />
+                        <div class="gf-grow">
+                            <div class="gf-ellipsis">@e.Commit.Subject</div>
+                            <div class="gf-dim gf-small gf-ellipsis">
+                                @e.Commit.AuthorName · @Avatars.When(e.Commit.AuthorDate) · <span class="gf-mono">@e.Commit.ShortSha[..7]</span>
+                                @if (e.OldPath is not null) { <span> · renamed from @e.OldPath</span> }
+                                else if (e.Path != _path) { <span> · as @e.Path</span> }
+                            </div>
+                        </div>
+                        <StatusGlyph Kind="e.Kind" />
+                    </div>
+                </Virtualize>
+                @if (!_loading && _entries.Count == 0)
+                {
+                    <div class="gf-empty">No committed history for this file yet.</div>
+                }
+            </div>
+        </div>
+        <div class="gf-splitter gf-splitter-x" data-var="--gf-files-w" data-target="gf-filehistory" data-min="240" data-max="900"></div>
+        <div class="gf-pane">
+            <DiffViewer Diff="_diff" Loading="_diffLoading" Title="@(_selected is null ? null : $"{_selected.Commit.ShortSha[..7]}  {_selected.Path}")" Placeholder="Select a commit" />
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _path = string.Empty;
+    private readonly List<FileHistoryEntry> _entries = [];
+    private FileHistoryEntry? _selected;
+    private FileDiff? _diff;
+    private bool _loading, _diffLoading;
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (W.OpenFileView is not { } target || W.Repo is not { } repo) return;
+        _path = target.Path;
+        _loading = true;
+        try
+        {
+            var batch = 0;
+            await foreach (var e in repo.Read.GetFileHistoryAsync(_path, _cts.Token))
+            {
+                _entries.Add(e);
+                if (_entries.Count == 1) await SelectAsync(e);
+                if (++batch % 200 == 0) StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            W.Error("File history", ex);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SelectAsync(FileHistoryEntry e)
+    {
+        if (W.Repo is not { } repo) return;
+        _selected = e;
+        _diffLoading = true;
+        StateHasChanged();
+        try
+        {
+            var options = new DiffOptions(W.Settings.IgnoreWhitespace);
+            var diff = await Task.Run(() => repo.Read.GetCommitDiffAsync(e.Commit.Sha, e.ToChange(), options));
+            if (_selected == e) _diff = diff;
+        }
+        catch (Exception ex)
+        {
+            W.Error("Load diff", ex);
+        }
+        finally
+        {
+            _diffLoading = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

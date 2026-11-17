@@ -36,7 +36,8 @@ internal sealed class TempRepo : IAsyncDisposable
 
     public async Task<string> GitAsync(params string[] args)
     {
-        var r = await Cli.RunAsync(new GitCommand(Path, args));
+        // A stuck git (or git-for-windows shell script) fails the test fast and kills its process tree.
+        var r = await Cli.RunAsync(new GitCommand(Path, args) { Timeout = TimeSpan.FromMinutes(2) });
         r.EnsureSuccess(string.Join(' ', args));
         return r.StandardOutput;
     }

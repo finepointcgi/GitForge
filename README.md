@@ -7,6 +7,11 @@ A fast, keyboard-first Git client for Windows, built with C#/.NET 10, Blazor, an
 - **High-velocity staging:** hunk- and line-level stage, unstage, and discard from the keyboard.
 - **Undo/redo (Ctrl+Z / Ctrl+Y):** commit, checkout, branch create/delete, reset, and discard (including untracked files).
 - **Command palette (Ctrl+P):** fuzzy search across actions, branches, and recent repositories; hide or solo branches in the graph.
+- **Repository tabs:** several repositories open at once (Ctrl+Tab to switch, Ctrl+W to close); tabs are restored on launch.
+- **Built-in conflict editor:** Mine / Base / Theirs side by side for every conflict; take mine, theirs, both, base, or edit by hand, then save and mark resolved.
+- **File history and blame:** commits that touched a file (following renames) and who last changed each line, at the working tree or any commit.
+- **Syntax highlighting** in diffs and blame using VS Code's TextMate grammars, computed only for the lines on screen.
+- **Git LFS:** LFS file badges, tracked patterns, and server file locks (lock, unlock, force-unlock with confirmation).
 - **Automatic recursive submodules:** after checkout, pull, merge, rebase, reset, or undo, submodules whose recorded commit changed are synced and updated (`--init --recursive`); submodules with local changes are never overwritten. Uninitialized submodules are initialized on open. Toggle in **Settings**.
 - **Advanced Git:** visual interactive rebase, reflog recovery, conflict tools, stash manager, submodules.
 - **Multi-account hosting:** tokens in Windows Credential Manager, repository browser, pull request list.
@@ -55,9 +60,14 @@ dotnet run --project src/GitForge.DevHost
 | Keys | Action |
 |---|---|
 | Ctrl+P | Command palette |
+| Ctrl+Tab / Ctrl+Shift+Tab (or Ctrl+PgDn / PgUp) | Next / previous repository tab |
+| Ctrl+T / Ctrl+W | Open a repository in a new tab / close the tab |
+| m / t / b, n / p, Ctrl+S | Conflict editor: take mine / theirs / both, next / previous conflict, save |
 | Ctrl+Z / Ctrl+Y | Undo / redo the last action |
 | Ctrl+1 / Ctrl+2 / Ctrl+3 | Select WIP (stage and commit) / Commit graph / Reflog |
-| Esc | Close the diff or reflog and return to the graph |
+| Ctrl+4 | Changes on the current branch since it branched (commits, files, and combined diff) |
+| Ctrl+H | Go to the current branch in the graph |
+| Esc | Close the diff, reflog, or branch changes and return to the graph |
 | Ctrl+O / Ctrl+Shift+O | Open / Clone repository |
 | Ctrl+Shift+F / L / P | Fetch / Pull / Push |
 | Ctrl+B | New branch |
@@ -72,6 +82,10 @@ dotnet run --project src/GitForge.DevHost
 | ? | Show all shortcuts |
 
 Click a branch to jump to its commit; double-click to check it out. Hover a branch to hide it from the graph, or right-click to solo it. Right-click branches, tags, stashes, and commits for more actions.
+
+Drag the borders in the graph header to resize columns; double-click a border, or right-click the header and choose **Reset column widths**, to restore defaults. Widths are remembered.
+
+A **remote deleted** label means the branch's copy on the remote was deleted (usually after its pull request merged) and a fetch removed it. Local commits are untouched. Right-click to push it again, stop tracking, or delete it; **Clean up…** at the top of the Local list deletes only branches whose commits are already in the current branch.
 
 ## Hosting accounts
 

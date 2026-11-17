@@ -11,5 +11,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/GitForge.Core.Tests/GitForge.Core.Tests.csproj" />
     <Project Path="tests/GitForge.Git.Tests/GitForge.Git.Tests.csproj" />
+    <Project Path="tests/GitForge.UI.Tests/GitForge.UI.Tests.csproj" />
   </Folder>
 </Solution>

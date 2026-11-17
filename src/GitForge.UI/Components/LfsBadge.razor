@@ -1,0 +1,25 @@
+@inject RepoWorkspace W
+
+@if (W.IsLfsPath(Path))
+{
+    <span class="gf-lfs-chip" title="Stored in Git LFS">LFS</span>
+}
+@if (W.LockFor(Path) is { } l)
+{
+    <span class="gf-lock @(l.IsOurs == true ? "ours" : "theirs")" title="@Tooltip(l)">
+        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+    </span>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Path { get; set; } = string.Empty;
+
+    /// <summary>Pass <c>W.Lfs</c> so the badge re-renders when files or locks change (a string-only parameter set would be skipped).</summary>
+    [Parameter] public LfsState? State { get; set; }
+
+    private static string Tooltip(LfsLock l)
+    {
+        var who = l.IsOurs == true ? "Locked by you" : $"Locked by {l.Owner}";
+        return l.LockedAt is { } at ? $"{who} · {at.LocalDateTime.ToString("g", CultureInfo.CurrentCulture)}" : who;
+    }
+}

@@ -36,17 +36,22 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 
 ## Phase 2 — Power-user workflow (target: +6 weeks)
 
-- ⬜ Syntax highlighting in diffs via TextMateSharp (tokenize visible rows only).
-- ⬜ Built-in 3-way merge editor (base/ours/theirs with per-chunk accept) alongside external tools (KDiff3, Beyond Compare, VS Code).
+- ✅ Syntax highlighting in diffs and blame via TextMateSharp (VS Code grammars, Dark+/Light+; tokenizes only rendered rows; old/new sides tokenized separately).
+- ✅ Built-in 3-way conflict editor (mine/base/theirs per conflict; mine, theirs, both, base, or hand edit; m/t/b/n/p/Ctrl+S) alongside external tools; modify/delete conflicts handled.
 - ⬜ Customizable key bindings; drag a branch onto another to merge or rebase.
-- ⬜ File history and blame views; multi-select cherry-pick; compare any two commits/branches.
+- ✅ File history (follows renames) and blame (working tree or any revision, age-shaded gutter).
+- ✅ Branch changes view (Ctrl+4): commits and combined diff since the merge base with a chosen branch, optionally including uncommitted work.
+- ✅ Resizable graph columns (drag header borders; double-click or header menu to reset; persisted).
+- ✅ Plain-language "remote deleted" branches: explanation, push again, stop tracking, and safe bulk clean-up (`git branch -d`).
+- ⬜ Multi-select cherry-pick; compare any two commits (branch-to-branch is covered by the branch changes view).
 - ⬜ Stash preview pane and hunk-level stash (`git stash push --patch` equivalent via patches).
 - ⬜ Line staging for new (untracked) files via intent-to-add.
-- ⬜ Multi-repository tabs and workspaces.
+- ✅ Multi-repository tabs (Ctrl+Tab, Ctrl+W, middle-click close; restored on launch; background tabs catch up on activation).
 
 ## Phase 3 — Enterprise scale (target: +6 weeks)
 
-- ⬜ Git LFS: tracked-file indicators, lock/unlock, locked-by badges (`git lfs locks --json`).
+- ✅ Git LFS: tracked patterns, LFS file badges, server locks (yours vs. others via `--verify`), lock/unlock/force-unlock.
+- ⬜ Git LFS: track new patterns from the UI; pull/prune LFS objects; lock-before-edit prompts for lockable files.
 - ⬜ Submodules: detached-HEAD warnings inside submodules; optional `--remote` tracking updates.
 - ⬜ Huge monorepos: `git status --porcelain=v2 -z` path with fsmonitor/untracked cache; sparse checkout and partial clone support; history paging beyond 1M commits.
 - ⬜ OAuth device-flow sign-in (GitHub, GitLab) and Microsoft Entra ID for Azure DevOps, alongside PATs.

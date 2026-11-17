@@ -54,6 +54,12 @@ public enum ConflictSide
     Theirs,
 }
 
+/// <summary>The three versions of a conflicted file (null = that side has no such file).</summary>
+public sealed record ConflictSides(string? Base, string? Ours, string? Theirs, bool IsBinary)
+{
+    public bool IsDeleteConflict => !IsBinary && (Ours is null || Theirs is null);
+}
+
 public sealed record FetchRequest(string? Remote = null, bool AllRemotes = true, bool Prune = true, bool Tags = true);
 
 /// <summary>Options for <c>git pull</c> (named to avoid confusion with hosting-provider pull requests).</summary>

@@ -40,6 +40,11 @@
                 </ActivatorContent>
                 <ChildContent>
                     <MudMenuItem Icon="@Icons.Material.Outlined.Add" OnClick="@(() => Shortcuts.RaiseAsync("branch.new"))">New branch… (Ctrl+B)</MudMenuItem>
+                    @if (s.HeadBranch is { } current)
+                    {
+                        <MudMenuItem Icon="@Icons.Material.Outlined.Difference" OnClick="@(() => W.ShowBranchChanges())">Show changes on @current (Ctrl+4)</MudMenuItem>
+                        <MudMenuItem Icon="@Icons.Material.Outlined.MyLocation" OnClick="W.GoToHead">Go to @current in graph (Ctrl+H)</MudMenuItem>
+                    }
                     <MudDivider />
                     @foreach (var b in s.LocalBranches.Take(40))
                     {

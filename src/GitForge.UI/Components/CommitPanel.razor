@@ -108,7 +108,8 @@
                 <div class="gf-file-row @(W.OpenDiff?.CommitFile == f && W.OpenDiff?.CommitSha == d.Summary.Sha ? "selected" : null)" @onclick="@(() => W.ShowDiff(new DiffTarget(null, d.Summary.Sha, f)))"
                      title="@(f.OldPath is null ? f.Path : $"{f.OldPath} → {f.Path}")">
                     <StatusGlyph Kind="f.Kind" />
-                    <span class="gf-ellipsis"><span class="gf-filename">@System.IO.Path.GetFileName(f.Path)</span> <span class="gf-dim">@System.IO.Path.GetDirectoryName(f.Path)?.Replace('\\', '/')</span></span>
+                    <span class="gf-ellipsis gf-grow"><span class="gf-filename">@System.IO.Path.GetFileName(f.Path)</span> <span class="gf-dim">@System.IO.Path.GetDirectoryName(f.Path)?.Replace('\\', '/')</span></span>
+                    <LfsBadge Path="@f.Path" State="W.Lfs" />
                 </div>
             }
         </div>
@@ -169,8 +170,14 @@
     private async Task LoadDetailsAsync()
     {
         var sha = W.WipSelected ? null : W.SelectedCommitSha;
-        if (sha == _loadedSha || W.Repo is not { } repo) return;
-        _loadedSha = sha;
+        var key = sha is null ? null : $"{W.Repo?.WorkingDirectory}|{sha}"; // per tab: the same SHA can exist in two clones
+        if (key == _loadedSha || W.Repo is not { } repo)
+        {
+            if (W.Repo is null) _details = null;
+            return;
+        }
+
+        _loadedSha = key;
         _details = null;
         if (sha is null) return;
 
@@ -178,7 +185,7 @@
         try
         {
             var details = await Task.Run(() => repo.Read.GetCommitDetailsAsync(sha));
-            if (sha == _loadedSha) _details = details;
+            if (key == _loadedSha) _details = details;
         }
         catch (Exception ex)
         {

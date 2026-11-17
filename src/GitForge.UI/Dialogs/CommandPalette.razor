@@ -71,19 +71,40 @@
                 new("Stash changes…", "Stash", Icons.Material.Outlined.Inventory2, "Ctrl+Shift+S", Cmd("stash.save")),
                 new("Pop latest stash", "Stash", Icons.Material.Outlined.Unarchive, null, W.PopStashAsync),
                 new("Update submodules (recursive)", "Submodules", Icons.Material.Outlined.Extension, null, W.UpdateSubmodulesAsync),
+                new("Next repository tab", "Tabs", Icons.Material.Outlined.Tab, "Ctrl+Tab", Cmd("tab.next")),
+                new("Close repository tab", "Tabs", Icons.Material.Outlined.Close, "Ctrl+W", Cmd("tab.close")),
                 new(W.Undo.CanUndo ? $"Undo {W.Undo.UndoDescription}" : "Undo", "Edit", Icons.Material.Outlined.Undo, "Ctrl+Z", Cmd("edit.undo")),
                 new(W.Undo.CanRedo ? $"Redo {W.Undo.RedoDescription}" : "Redo", "Edit", Icons.Material.Outlined.Redo, "Ctrl+Y", Cmd("edit.redo")),
                 new("Go to WIP (stage and commit)", "View", Icons.Material.Outlined.EditNote, "Ctrl+1", Cmd("view.status")),
                 new("Go to commit graph", "View", Icons.Material.Outlined.AccountTree, "Ctrl+2", Cmd("view.history")),
                 new("Reflog — recover lost work", "View", Icons.Material.Outlined.Restore, "Ctrl+3", Cmd("view.reflog")),
+                new("Changes on current branch (since it branched)", "View", Icons.Material.Outlined.Difference, "Ctrl+4", Cmd("view.changes")),
+                new("Go to current branch in graph", "View", Icons.Material.Outlined.MyLocation, "Ctrl+H", Cmd("graph.head")),
                 new("Show all branches in graph", "View", Icons.Material.Outlined.Visibility, null, W.ShowAllRefsAsync),
                 new("Toggle git console", "View", Icons.Material.Outlined.Terminal, "Ctrl+`", Cmd("console.toggle")),
                 new("Pull requests…", "Remote", Icons.Material.Outlined.MergeType, null, Cmd("prs.open")),
             ]);
 
+            if (W.OpenDiff?.Path is { Length: > 0 } openPath)
+            {
+                _all.Add(new($"File history: {openPath}", "File", Icons.Material.Outlined.History, null, () => { W.ShowFileHistory(openPath); return Task.CompletedTask; }));
+                _all.Add(new($"Blame: {openPath}", "File", Icons.Material.Outlined.PersonSearch, null, () => { W.ShowBlame(openPath, W.OpenDiff?.CommitSha); return Task.CompletedTask; }));
+            }
+
+            if (W.Lfs.InUse)
+            {
+                _all.Add(new("LFS: refresh locks", "LFS", Icons.Material.Outlined.Lock, null, W.RefreshLocksAsync));
+            }
+
+            foreach (var other in W.Sessions.Where(s => s != W.Active))
+            {
+                _all.Add(new($"Switch to {other.Name}", "Tabs", Icons.Material.Outlined.Tab, null, () => W.ActivateAsync(other)));
+            }
+
             foreach (var b in W.Snapshot?.LocalBranches ?? [])
             {
                 if (!b.IsCurrent) _all.Add(new($"Checkout {b.Name}", "Branch", Icons.Material.Outlined.Computer, null, () => W.CheckoutAsync(b.Name)));
+                if (!b.IsCurrent) _all.Add(new($"Show changes on {b.Name}", "Branch", Icons.Material.Outlined.Difference, null, () => { W.ShowBranchChanges(b.Name); return Task.CompletedTask; }));
             }
 
             foreach (var b in W.Snapshot?.RemoteBranches ?? [])

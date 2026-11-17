@@ -279,6 +279,149 @@ internal sealed class RepositoryReader(RepoContext ctx) : IRepositoryReader
             .ToList();
     }
 
+    /// <summary>
+    /// <c>git log --follow --name-status</c>: records start with \x1e, then the commit fields, then one name-status line
+    /// giving the file's name in that commit (so renamed files keep resolving).
+    /// </summary>
+    public async IAsyncEnumerable<FileHistoryEntry> GetFileHistoryAsync(string path, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var args = new List<string>
+        {
+            "--literal-pathspecs", "log", "--follow", "-M", "--name-status", "--no-show-signature",
+            $"--format={RecordSep}%H{FieldSep}%P{FieldSep}%an{FieldSep}%ae{FieldSep}%at{FieldSep}%s", "--", path,
+        };
+
+        var currentPath = path;
+        await foreach (var raw in ctx.Cli.StreamAsync(new GitCommand(ctx.WorkDir, args), RecordSep, cancellationToken).ConfigureAwait(false))
+        {
+            var lines = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            if (lines.Length == 0) continue;
+            var f = lines[0].TrimEnd('\r').Split(FieldSep);
+            if (f.Length < 6) continue;
+
+            var kind = FileChangeKind.Modified;
+            string? oldPath = null;
+            var status = lines.Skip(1).Select(l => l.TrimEnd('\r').Split('\t')).FirstOrDefault(p => p.Length >= 2);
+            if (status is not null)
+            {
+                if (StashOperations.ParseNameStatus(string.Join('\t', status)) is [var parsed, ..]) kind = parsed.Kind;
+                if (status.Length >= 3)
+                {
+                    oldPath = status[1];
+                    currentPath = status[2];
+                }
+                else
+                {
+                    currentPath = status[1];
+                }
+            }
+
+            var parents = f[1].Length == 0 ? [] : f[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var commit = new CommitInfo(f[0], parents, f[2], f[3], DateTimeOffset.FromUnixTimeSeconds(long.Parse(f[4], CultureInfo.InvariantCulture)), f[5]);
+            yield return new FileHistoryEntry(commit, currentPath, oldPath, kind);
+            if (oldPath is not null) currentPath = oldPath; // older commits know the file by its previous name
+        }
+    }
+
+    public async Task<string?> GetMergeBaseAsync(string a, string b, CancellationToken cancellationToken = default)
+    {
+        var r = await ctx.RunAsync(["merge-base", BranchOperations.Guard(a), BranchOperations.Guard(b)], cancellationToken, okCodes: [0, 1]).ConfigureAwait(false);
+        var sha = r.StandardOutput.Trim();
+        return r.ExitCode == 0 && sha.Length >= 40 ? sha : null; // exit 1 = no common ancestor
+    }
+
+    public async Task<IReadOnlyList<FileChange>> GetChangesBetweenAsync(string fromRevision, string? toRevision, CancellationToken cancellationToken = default)
+    {
+        var args = new List<string> { "diff", "--name-status", "-M", "--no-ext-diff", BranchOperations.Guard(fromRevision) };
+        if (toRevision is not null) args.Add(BranchOperations.Guard(toRevision));
+        args.Add("--");
+        var r = await ctx.RunAsync(args, cancellationToken).ConfigureAwait(false);
+        return StashOperations.ParseNameStatus(r.EnsureSuccess("diff").StandardOutput)
+            .OrderBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public async Task<FileDiff?> GetDiffBetweenAsync(string fromRevision, string? toRevision, FileChange change, DiffOptions options, CancellationToken cancellationToken = default)
+    {
+        var args = new List<string> { "--literal-pathspecs", "diff", "--no-color", "--no-ext-diff", "-M", $"-U{options.ContextLines}" };
+        if (options.IgnoreWhitespace) args.Add("-w");
+        args.Add(BranchOperations.Guard(fromRevision));
+        if (toRevision is not null) args.Add(BranchOperations.Guard(toRevision));
+        args.Add("--");
+        if (change.OldPath is not null) args.Add(change.OldPath);
+        args.Add(change.Path);
+        var r = await ctx.RunAsync(args, cancellationToken).ConfigureAwait(false);
+        return UnifiedDiffParser.ParseSingle(r.EnsureSuccess("diff").StandardOutput);
+    }
+
+    public async Task<BlameResult> GetBlameAsync(string path, string? revision, CancellationToken cancellationToken = default)
+    {
+        // git blame does not honor --end-of-options before <rev>, so reject option-like revisions explicitly.
+        var args = new List<string> { "blame", "--porcelain" };
+        if (revision is { Length: > 0 }) args.Add(BranchOperations.Guard(revision));
+        args.AddRange(["--", path]);
+        var result = await ctx.RunAsync(args, cancellationToken).ConfigureAwait(false);
+        return ParseBlame(result.EnsureSuccess("blame").StandardOutput);
+    }
+
+    /// <summary>
+    /// Parses <c>git blame --porcelain</c>: a header "&lt;sha&gt; &lt;orig&gt; &lt;final&gt; [&lt;count&gt;]", key/value lines the
+    /// first time a commit appears, then the content line prefixed with a tab.
+    /// </summary>
+    internal static BlameResult ParseBlame(string output)
+    {
+        var lines = new List<BlameLine>();
+        var commits = new Dictionary<string, BlameCommit>(StringComparer.Ordinal);
+        string? sha = null;
+        var final = 0;
+        string author = string.Empty, email = string.Empty, summary = string.Empty;
+        long time = 0;
+
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
+            if (line.StartsWith('\t'))
+            {
+                if (sha is null) continue;
+                if (!commits.ContainsKey(sha))
+                {
+                    commits[sha] = new BlameCommit(sha, author, email.Trim('<', '>'), DateTimeOffset.FromUnixTimeSeconds(time), summary);
+                }
+
+                lines.Add(new BlameLine(final, sha, line[1..]));
+                sha = null;
+                continue;
+            }
+
+            if (sha is null)
+            {
+                var parts = line.Split(' ');
+                if (parts.Length >= 3 && parts[0].Length >= 40 && parts[0].All(Uri.IsHexDigit))
+                {
+                    sha = parts[0];
+                    final = int.Parse(parts[2], CultureInfo.InvariantCulture);
+                    author = email = summary = string.Empty;
+                    time = 0;
+                }
+
+                continue;
+            }
+
+            var space = line.IndexOf(' ', StringComparison.Ordinal);
+            var key = space < 0 ? line : line[..space];
+            var value = space < 0 ? string.Empty : line[(space + 1)..];
+            switch (key)
+            {
+                case "author": author = value; break;
+                case "author-mail": email = value; break;
+                case "author-time": time = long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var t) ? t : 0; break;
+                case "summary": summary = value; break;
+            }
+        }
+
+        return new BlameResult(lines, commits);
+    }
+
     private static string? ShortenUpstream(string? canonical, string? remote)
     {
         if (canonical is null || remote is null) return null;

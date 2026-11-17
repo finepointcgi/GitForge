@@ -85,6 +85,7 @@ public static class UiServiceCollectionExtensions
         services.AddScoped<ShortcutService>();
         services.AddSingleton<IPlatformShell, DefaultPlatformShell>();
         services.AddSingleton(new StartupOptions(null));
+        services.AddSingleton<SyntaxHighlighter>();
         return services;
     }
 }

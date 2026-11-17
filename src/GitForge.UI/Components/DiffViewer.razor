@@ -3,6 +3,7 @@
 @inject ISettingsStore SettingsStore
 @inject ShortcutService Shortcuts
 @inject IJSRuntime JS
+@inject SyntaxHighlighter Highlighter
 
 <div class="gf-diff @(HasFocus ? "focused" : null)">
     <div class="gf-pane-toolbar">
@@ -64,9 +65,9 @@
                 {
                     <div class="gf-diff-row sbs">
                         <span class="ln">@r.Left?.OldLineNumber</span>
-                        <span class="code @Css(r.Left) @(IsSelected(r.HunkIndex, r.LeftLineIndex) ? "sel" : null)" @onclick="@(e => Toggle(r.HunkIndex, r.LeftLineIndex, r.Left, e.ShiftKey))">@r.Left?.DisplayText</span>
+                        <span class="code @Css(r.Left) @(IsSelected(r.HunkIndex, r.LeftLineIndex) ? "sel" : null)" @onclick="@(e => Toggle(r.HunkIndex, r.LeftLineIndex, r.Left, e.ShiftKey))">@(r.Left is null ? null : Code(r.HunkIndex, r.LeftLineIndex, r.Left))</span>
                         <span class="ln">@r.Right?.NewLineNumber</span>
-                        <span class="code @Css(r.Right) @(IsSelected(r.HunkIndex, r.RightLineIndex) ? "sel" : null)" @onclick="@(e => Toggle(r.HunkIndex, r.RightLineIndex, r.Right, e.ShiftKey))">@r.Right?.DisplayText</span>
+                        <span class="code @Css(r.Right) @(IsSelected(r.HunkIndex, r.RightLineIndex) ? "sel" : null)" @onclick="@(e => Toggle(r.HunkIndex, r.RightLineIndex, r.Right, e.ShiftKey))">@(r.Right is null ? null : Code(r.HunkIndex, r.RightLineIndex, r.Right))</span>
                     </div>
                 }
             </Virtualize>
@@ -87,7 +88,7 @@
                         <span class="ln">@r.Line!.OldLineNumber</span>
                         <span class="ln">@r.Line.NewLineNumber</span>
                         <span class="sign">@Sign(r.Line)</span>
-                        <span class="code">@r.Line.DisplayText</span>
+                        <span class="code">@Code(r.HunkIndex, r.LineIndex, r.Line)</span>
                         @if (r.Line.NoNewlineAtEnd)
                         {
                             <span class="gf-dim gf-small"> ⏎̸ no newline at end of file</span>
@@ -127,10 +128,31 @@
 
     protected override void OnInitialized() => Shortcuts.Command += OnCommand;
 
+    [CascadingParameter(Name = "IsDark")] public bool IsDark { get; set; }
+
+    private DiffHighlighter? _highlighter;
+    private bool _highlighterDark;
+    private bool _highlighterOn;
+
+    /// <summary>Highlighted (or plain, HTML-encoded) code for one line, tokenized only when the row renders.</summary>
+    private MarkupString Code(int hunk, int line, DiffLine l)
+    {
+        var on = W.Settings.SyntaxHighlighting && Diff is not null;
+        if (on && (_highlighter is null || _highlighterDark != IsDark || !_highlighterOn))
+        {
+            _highlighter = new DiffHighlighter(Highlighter, Diff!, IsDark);
+            _highlighterDark = IsDark;
+        }
+
+        _highlighterOn = on;
+        return (MarkupString)(on ? _highlighter!.Html(hunk, line) : System.Net.WebUtility.HtmlEncode(l.DisplayText));
+    }
+
     protected override void OnParametersSet()
     {
         if (ReferenceEquals(Diff, _rendered)) return;
         _rendered = Diff;
+        _highlighter = null;
         _selection.Clear();
         _forceLarge = false;
         _cursor = -1;

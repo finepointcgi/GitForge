@@ -106,6 +106,86 @@ internal sealed class IndexOperations(RepoContext ctx) : IIndexOperations
     }
 
     private Task<bool> IsUnbornAsync(CancellationToken ct) => ctx.Lib.RunAsync(r => r.Info.IsHeadUnborn, ct);
+
+    public async Task<ConflictSides> GetConflictSidesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var (b, bBin) = await ReadStageAsync(1, path, cancellationToken).ConfigureAwait(false);
+        var (o, oBin) = await ReadStageAsync(2, path, cancellationToken).ConfigureAwait(false);
+        var (t, tBin) = await ReadStageAsync(3, path, cancellationToken).ConfigureAwait(false);
+        return new ConflictSides(b, o, t, bBin || oBin || tBin);
+    }
+
+    public async Task<string?> GetMergeTextAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var sides = await GetConflictSidesAsync(path, cancellationToken).ConfigureAwait(false);
+        if (sides.IsBinary || sides.Ours is null || sides.Theirs is null) return null;
+
+        var dir = Directory.CreateTempSubdirectory("gitforge-merge-");
+        try
+        {
+            var ours = Path.Combine(dir.FullName, "mine");
+            var @base = Path.Combine(dir.FullName, "base");
+            var theirs = Path.Combine(dir.FullName, "theirs");
+            var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            await File.WriteAllTextAsync(ours, sides.Ours, utf8, cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(@base, sides.Base ?? string.Empty, utf8, cancellationToken).ConfigureAwait(false); // add/add: empty base
+            await File.WriteAllTextAsync(theirs, sides.Theirs, utf8, cancellationToken).ConfigureAwait(false);
+
+            // Exit code = number of conflicts (0..127); negative values (255) are errors.
+            var result = await ctx.RunAsync(
+                ["merge-file", "-p", "--diff3", "-L", "mine", "-L", "base", "-L", "theirs", ours, @base, theirs],
+                cancellationToken, okCodes: Enumerable.Range(0, 128).ToArray()).ConfigureAwait(false);
+            return result.EnsureSuccess("merge-file").StandardOutput;
+        }
+        finally
+        {
+            try
+            {
+                dir.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    public async Task SaveResolutionAsync(string path, string content, CancellationToken cancellationToken = default)
+    {
+        var full = SafeWorkPath(path);
+
+        // Index stages hold normalized (usually LF) text; keep the working tree's CRLF convention if it had one.
+        if (File.Exists(full) && !content.Contains("\r\n", StringComparison.Ordinal)
+            && (await File.ReadAllTextAsync(full, cancellationToken).ConfigureAwait(false)).Contains("\r\n", StringComparison.Ordinal))
+        {
+            content = content.Replace("\n", "\r\n", StringComparison.Ordinal);
+        }
+
+        await File.WriteAllTextAsync(full, content, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken).ConfigureAwait(false);
+        await MarkResolvedAsync(path, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task ResolveDeletionAsync(string path, bool keepFile, CancellationToken cancellationToken = default) =>
+        keepFile
+            ? MarkResolvedAsync(path, cancellationToken)
+            : ctx.WriteAsync("delete file", ["--literal-pathspecs", "rm", "-q", "--", path], cancellationToken);
+
+    /// <summary>Reads index stage N (1 = base, 2 = ours, 3 = theirs). Null when the stage does not exist.</summary>
+    private async Task<(string? Text, bool Binary)> ReadStageAsync(int stage, string path, CancellationToken ct)
+    {
+        var r = await ctx.RunAsync(["show", $":{stage}:{path}"], ct).ConfigureAwait(false);
+        if (!r.Succeeded) return (null, false);
+        var text = r.StandardOutput;
+        var binary = text.AsSpan(0, Math.Min(text.Length, 8000)).Contains('\0') || text.Contains('�', StringComparison.Ordinal);
+        return (binary ? null : text, binary);
+    }
+
+    private string SafeWorkPath(string relative)
+    {
+        var root = Path.GetFullPath(ctx.WorkDir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var full = Path.GetFullPath(Path.Combine(root, relative));
+        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Path escapes the repository: {relative}");
+        return full;
+    }
 }
 
 internal sealed class BranchOperations(RepoContext ctx) : IBranchOperations

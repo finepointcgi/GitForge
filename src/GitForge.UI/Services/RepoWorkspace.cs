@@ -9,12 +9,15 @@ using MudBlazor;
 
 namespace GitForge.UI.Services;
 
-/// <summary>What the center pane shows. The graph is home; diffs and the reflog open over it (Esc returns).</summary>
+/// <summary>What the center pane shows. The graph is home; other views open over it (Esc returns).</summary>
 public enum CenterView
 {
     Graph,
     Diff,
     Reflog,
+    FileHistory,
+    Blame,
+    BranchChanges,
 }
 
 public enum PullMode
@@ -31,9 +34,16 @@ public sealed record DiffTarget(FileStatusEntry? Working, string? CommitSha, Fil
     public string Path => Working?.Path ?? CommitFile?.Path ?? string.Empty;
 }
 
+/// <summary>A file shown in the history or blame view, optionally as of a revision (null = working tree / HEAD).</summary>
+public sealed record FileViewTarget(string Path, string? Revision = null);
+
+/// <summary>Compare a branch with the branch it came from: <see cref="Head"/> is "HEAD" or a branch name; a null base picks a sensible default.</summary>
+public sealed record BranchCompareTarget(string Head, string? Base, bool IncludeWorkingTree);
+
 /// <summary>
-/// Per-window state for the active repository. Components subscribe to <see cref="Changed"/> (coarse refresh)
-/// and <see cref="HistoryChanged"/> (graph rows appended). All git work runs off the UI thread.
+/// Per-window state: the open repository tabs and the active one. Components bind to the active session through
+/// the delegating properties below, subscribe to <see cref="Changed"/> (coarse refresh) and <see cref="HistoryChanged"/>
+/// (graph rows appended or tab switched). All git work runs off the UI thread; background tabs refresh on activation.
 /// </summary>
 public sealed partial class RepoWorkspace : IAsyncDisposable
 {
@@ -46,11 +56,11 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
     private readonly GitEngineOptions _engine;
     private readonly ISnackbar _snackbar;
     private readonly ILogger<RepoWorkspace> _log;
-    private CancellationTokenSource? _historyCts;
-    private CancellationTokenSource? _autoFetchCts;
-    private int _refreshing;
-    private readonly Lock _refreshSync = new();
-    private RepositoryChangeKind _pendingRefresh;
+    private readonly List<RepoSession> _sessions = [];
+    private readonly UndoManager _noUndo = new();
+    private readonly List<string> _noConsole = [];
+    private readonly HashSet<string> _noRefs = [];
+    private RepoSession? _active;
 
     public RepoWorkspace(IGitRepositoryFactory factory, ISettingsStore settings, IAccountService accounts, GitEngineOptions engine, ISnackbar snackbar, ILogger<RepoWorkspace> log)
     {
@@ -61,44 +71,57 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         _snackbar = snackbar;
         _log = log;
         _engine.SelfHostedResolver = _accounts.ResolveSelfHosted;
-        Undo.Changed += (_, _) => Notify();
     }
 
-    public IGitRepository? Repo { get; private set; }
-    public RepositorySnapshot? Snapshot { get; private set; }
+    // ---------- Tabs ----------
+
+    public IReadOnlyList<RepoSession> Sessions => _sessions;
+    public RepoSession? Active => _active;
+
+    // ---------- Active-session state (what components bind to) ----------
+
+    public IGitRepository? Repo => _active?.Repo;
+    public RepositorySnapshot? Snapshot => _active?.Snapshot;
 
     /// <summary>Nested submodule status (<c>git submodule status --recursive</c>), refreshed with refs.</summary>
-    public IReadOnlyList<SubmoduleStatusEntry> SubmoduleStatus { get; private set; } = [];
-    public IReadOnlyDictionary<string, IReadOnlyList<RefLabel>> RefIndex { get; private set; } = new Dictionary<string, IReadOnlyList<RefLabel>>();
-    public WorkingCopyStatus Status { get; private set; } = WorkingCopyStatus.Empty;
-    public AppendOnlyList<GraphRow> Rows { get; private set; } = new();
-    public bool HistoryLoading { get; private set; }
+    public IReadOnlyList<SubmoduleStatusEntry> SubmoduleStatus => _active?.SubmoduleStatus ?? [];
+    public IReadOnlyDictionary<string, IReadOnlyList<RefLabel>> RefIndex => _active?.RefIndex ?? new Dictionary<string, IReadOnlyList<RefLabel>>();
+    public WorkingCopyStatus Status => _active?.Status ?? WorkingCopyStatus.Empty;
+    public AppendOnlyList<GraphRow> Rows => _active?.Rows ?? EmptyRows;
+    public bool HistoryLoading => _active?.HistoryLoading ?? false;
+    public UndoManager Undo => _active?.Undo ?? _noUndo;
+    public List<string> ConsoleLines => _active?.ConsoleLines ?? _noConsole;
+    public bool WipSelected => _active?.WipSelected ?? false;
+    public string? SelectedCommitSha => _active?.SelectedCommitSha;
+    public CenterView Center => _active?.Center ?? CenterView.Graph;
+    public DiffTarget? OpenDiff => _active?.OpenDiff;
+    public FileViewTarget? OpenFileView => _active?.OpenFileView;
+    public HashSet<string> HiddenRefs => _active?.HiddenRefs ?? _noRefs;
+    public string? SoloRef => _active?.SoloRef;
+    public bool IsFilteringRefs => SoloRef is not null || HiddenRefs.Count > 0;
+
+    /// <summary>Keyboard focus: graph (false) or commit panel (true). h/l switch; vim keys act on the focused side.</summary>
+    public bool PanelFocused
+    {
+        get => _active?.PanelFocused ?? false;
+        set
+        {
+            if (_active is not null) _active.PanelFocused = value;
+        }
+    }
+
+    private static readonly AppendOnlyList<GraphRow> EmptyRows = new();
+
     public bool IsBusy => BusyText is not null;
     public string? BusyText { get; private set; }
     public string? ProgressText { get; private set; }
     public bool ConsoleOpen { get; set; }
-    public List<string> ConsoleLines { get; } = [];
     public AppSettings Settings => _settings.Current;
-    public UndoManager Undo { get; } = new();
 
-    // Selection model: either the WIP node or one commit is selected; the commit panel follows it.
-    public bool WipSelected { get; private set; }
-    public string? SelectedCommitSha { get; private set; }
-    public CenterView Center { get; private set; } = CenterView.Graph;
-
-    /// <summary>Keyboard focus: graph (false) or commit panel (true). h/l switch; vim keys act on the focused side.</summary>
-    public bool PanelFocused { get; set; }
-    public DiffTarget? OpenDiff { get; private set; }
-
-    // Hide / solo branches in the graph (canonical ref names).
-    public HashSet<string> HiddenRefs { get; } = new(StringComparer.Ordinal);
-    public string? SoloRef { get; private set; }
-    public bool IsFilteringRefs => SoloRef is not null || HiddenRefs.Count > 0;
-
-    /// <summary>Coarse change notification (snapshot, status, busy state, selection).</summary>
+    /// <summary>Coarse change notification (snapshot, status, busy state, selection, tabs).</summary>
     public event Action? Changed;
 
-    /// <summary>History rows were appended or replaced.</summary>
+    /// <summary>History rows were appended or replaced, or the active tab changed.</summary>
     public event Action? HistoryChanged;
 
     /// <summary>Ask the graph to scroll a commit into view.</summary>
@@ -115,40 +138,194 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
     public bool HasWip => Repo is not null && !Status.IsClean;
 
+    // ---------- Git LFS ----------
+
+    public LfsState Lfs => _active?.Lfs ?? LfsState.None;
+
+    public bool IsLfsPath(string path) => _active?.LfsPaths.Contains(path) == true;
+
+    public LfsLock? LockFor(string path) => _active is { } s && s.LocksByPath.TryGetValue(path, out var l) ? l : null;
+
+    /// <summary>
+    /// Reloads LFS patterns and files (and optionally server locks). Skipped entirely for repositories whose root
+    /// .gitattributes does not route anything through LFS, so non-LFS repos never spawn git-lfs.
+    /// </summary>
+    private async Task RefreshLfsAsync(RepoSession session, bool includeLocks)
+    {
+        try
+        {
+            var attributes = Path.Combine(session.Path, ".gitattributes");
+            var usesLfs = File.Exists(attributes) && (await File.ReadAllTextAsync(attributes)).Contains("filter=lfs", StringComparison.Ordinal);
+            if (!usesLfs && !session.Lfs.InUse) return;
+            if (!await session.Repo.Lfs.IsAvailableAsync())
+            {
+                session.Lfs = new LfsState(false, [new LfsPattern("(patterns in .gitattributes)", false, ".gitattributes")], [],
+                    new LfsLockList([], false, "git-lfs is not installed, so LFS files are checked out as small pointer files. Install Git LFS (bundled with Git for Windows) and reopen the repository."));
+                if (session == _active) Notify();
+                return;
+            }
+
+            var patterns = await session.Repo.Lfs.GetPatternsAsync();
+            var files = await session.Repo.Lfs.GetFilesAsync();
+            var locks = includeLocks ? await session.Repo.Lfs.GetLocksAsync() : session.Lfs.Locks;
+            session.Lfs = new LfsState(true, patterns, files, locks);
+            session.LfsPaths = files.Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
+            session.LocksByPath = locks.Locks.GroupBy(l => l.Path, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+            if (session == _active) Notify();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogRefreshFailed(_log, ex);
+        }
+    }
+
+    public Task RefreshLocksAsync() =>
+        _active is { } s ? RunAsync("Refreshing LFS locks", (_, _) => RefreshLfsAsync(s, includeLocks: true)) : Task.CompletedTask;
+
+    public Task LockFileAsync(string path) => _active is { } s
+        ? RunAsync($"Locking {path}", async (r, _) =>
+        {
+            await r.Lfs.LockAsync(path);
+            await RefreshLfsAsync(s, includeLocks: true);
+        }, $"Locked {path}")
+        : Task.CompletedTask;
+
+    public Task UnlockFileAsync(string path, bool force) => _active is { } s
+        ? RunAsync(force ? $"Breaking lock on {path}" : $"Unlocking {path}", async (r, _) =>
+        {
+            await r.Lfs.UnlockAsync(path, force);
+            await RefreshLfsAsync(s, includeLocks: true);
+        }, $"Unlocked {path}")
+        : Task.CompletedTask;
+
+    public Task TrackWithLfsAsync(string pattern, bool lockable) => _active is { } s
+        ? RunAsync($"Tracking {pattern} with LFS", async (r, _) =>
+        {
+            await r.Lfs.TrackAsync(pattern, lockable);
+            await RefreshLfsAsync(s, includeLocks: false);
+        }, $"{pattern} is now stored in LFS (commit .gitattributes to share it)")
+        : Task.CompletedTask;
+
     // ---------- Selection & center pane ----------
 
     public void SelectWip()
     {
-        WipSelected = true;
-        SelectedCommitSha = null;
+        if (_active is not { } s) return;
+        s.WipSelected = true;
+        s.SelectedCommitSha = null;
         Notify();
     }
 
     public void SelectCommit(string sha, bool reveal = false)
     {
-        WipSelected = false;
-        SelectedCommitSha = sha;
+        if (_active is not { } s) return;
+        s.WipSelected = false;
+        s.SelectedCommitSha = sha;
         Notify();
         if (reveal) RevealRequested?.Invoke(sha);
     }
 
     public void ShowGraph()
     {
-        Center = CenterView.Graph;
-        OpenDiff = null;
+        if (_active is not { } s) return;
+        s.Center = CenterView.Graph;
+        s.OpenDiff = null;
         Notify();
     }
 
-    public void ShowReflog()
-    {
-        Center = CenterView.Reflog;
-        Notify();
-    }
+    public void ShowReflog() => SetCenter(CenterView.Reflog);
 
     public void ShowDiff(DiffTarget target)
     {
-        OpenDiff = target;
-        Center = CenterView.Diff;
+        if (_active is not { } s) return;
+        s.OpenDiff = target;
+        s.Center = CenterView.Diff;
+        Notify();
+    }
+
+    public BranchCompareTarget? BranchCompare => _active?.BranchCompare;
+
+    /// <summary>Back to the graph with the current branch selected and scrolled into view (the WIP row when there are changes).</summary>
+    public void GoToHead()
+    {
+        if (_active is not { } s) return;
+        s.Center = CenterView.Graph;
+        s.OpenDiff = null;
+        if (HasWip)
+        {
+            s.WipSelected = true;
+            s.SelectedCommitSha = null;
+        }
+        else if (s.Snapshot?.HeadSha is { } head)
+        {
+            s.WipSelected = false;
+            s.SelectedCommitSha = head;
+        }
+
+        Notify();
+        RevealRequested?.Invoke(s.SelectedCommitSha ?? string.Empty);
+    }
+
+    /// <summary>Shows everything a branch changes since it diverged from its base (default: the current branch, including uncommitted work).</summary>
+    public void ShowBranchChanges(string? head = null, string? baseRef = null)
+    {
+        if (_active is not { } s) return;
+        var isCurrent = head is null || head == "HEAD" || head == CurrentBranch;
+        s.BranchCompare = new BranchCompareTarget(isCurrent ? "HEAD" : head!, baseRef, IncludeWorkingTree: isCurrent);
+        s.Center = CenterView.BranchChanges;
+        Notify();
+    }
+
+    /// <summary>Deletes local branches whose upstream was deleted on the remote. Only fully merged branches are removed (<c>git branch -d</c>).</summary>
+    public Task CleanUpGoneBranchesAsync(IReadOnlyList<string> names) =>
+        RunAsync("Cleaning up branches", async (r, _) =>
+        {
+            var deleted = new List<string>();
+            var unmerged = new List<string>();
+            var failed = new List<string>();
+            foreach (var name in names)
+            {
+                try
+                {
+                    await r.Branches.DeleteAsync(name, force: false); // git branch -d: refuses when commits would be lost
+                    deleted.Add(name);
+                }
+                catch (GitCommandException ex) when (ex.GitMessage.Contains("not fully merged", StringComparison.OrdinalIgnoreCase))
+                {
+                    unmerged.Add(name);
+                }
+                catch (GitCommandException ex)
+                {
+                    failed.Add($"{name} ({ex.GitMessage.Split('\n')[0].Trim()})");
+                }
+            }
+
+            if (deleted.Count > 0) Info($"Deleted {deleted.Count} branch{(deleted.Count == 1 ? string.Empty : "es")}: {string.Join(", ", deleted)}", Severity.Success);
+            if (unmerged.Count > 0)
+            {
+                _snackbar.Add($"Kept {string.Join(", ", unmerged)}: {(unmerged.Count == 1 ? "it has" : "they have")} commits that are not in {CurrentBranch ?? "HEAD"} (common after squash merges). Right-click › Delete › Force delete if you are sure.",
+                    Severity.Warning, o => o.VisibleStateDuration = 12000);
+            }
+
+            if (failed.Count > 0) _snackbar.Add($"Could not delete {string.Join(", ", failed)}", Severity.Error, o => o.VisibleStateDuration = 12000);
+        });
+
+    public void ShowFileHistory(string path) => ShowFileView(CenterView.FileHistory, new FileViewTarget(path));
+
+    public void ShowBlame(string path, string? revision = null) => ShowFileView(CenterView.Blame, new FileViewTarget(path, revision));
+
+    private void ShowFileView(CenterView view, FileViewTarget target)
+    {
+        if (_active is not { } s) return;
+        s.OpenFileView = target;
+        s.Center = view;
+        Notify();
+    }
+
+    private void SetCenter(CenterView view)
+    {
+        if (_active is not { } s) return;
+        s.Center = view;
         Notify();
     }
 
@@ -160,130 +337,227 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         _engine.GitExecutablePath = s.GitExecutablePath;
     }
 
+    /// <summary>Re-opens the tabs from the last run, then activates <paramref name="openPath"/> (command line) or the last active tab.</summary>
+    public async Task RestoreTabsAsync(string? openPath)
+    {
+        var saved = Settings.OpenRepositories.Where(Directory.Exists).ToList();
+        if (saved.Count == 0 && openPath is null && Settings.RecentRepositories is [var recent, ..] && Directory.Exists(recent))
+        {
+            saved.Add(recent);
+        }
+
+        foreach (var path in saved)
+        {
+            await OpenSessionAsync(path, activate: false, report: false);
+        }
+
+        if (openPath is { Length: > 0 })
+        {
+            await OpenAsync(openPath);
+        }
+        else
+        {
+            var active = _sessions.FirstOrDefault(s => string.Equals(s.Path, Settings.ActiveRepository, StringComparison.OrdinalIgnoreCase)) ?? _sessions.LastOrDefault();
+            if (active is not null) await ActivateAsync(active);
+        }
+    }
+
+    /// <summary>Opens a repository in a new tab, or switches to its tab if it is already open.</summary>
     public async Task OpenAsync(string path)
+    {
+        var session = await OpenSessionAsync(path, activate: true, report: true);
+        if (session is null) return;
+        await _settings.UpdateAsync(s => s with { RecentRepositories = [session.Path, .. s.RecentRepositories.Where(r => !string.Equals(r, session.Path, StringComparison.OrdinalIgnoreCase)).Take(19)] });
+    }
+
+    private async Task<RepoSession?> OpenSessionAsync(string path, bool activate, bool report)
     {
         try
         {
             var root = _factory.Discover(path.Trim().Trim('"'));
             if (root is null)
             {
-                _snackbar.Add($"Not a Git repository: {path}", Severity.Warning);
-                return;
+                if (report) _snackbar.Add($"Not a Git repository: {path}", Severity.Warning);
+                return null;
             }
 
-            await CloseAsync();
-            Repo = await _factory.OpenAsync(root);
-            Repo.Changed += OnRepositoryChanged;
-            await _settings.UpdateAsync(s => s with { RecentRepositories = [root, .. s.RecentRepositories.Where(r => !string.Equals(r, root, StringComparison.OrdinalIgnoreCase)).Take(19)] });
+            var existing = _sessions.FirstOrDefault(s => string.Equals(Path.GetFullPath(s.Path), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase));
+            if (existing is not null)
+            {
+                if (activate) await ActivateAsync(existing);
+                return existing;
+            }
 
-            await RefreshAsync(RepositoryChangeKind.All);
-            if (HasWip) SelectWip();
-            else if (Snapshot?.HeadSha is { } head) SelectCommit(head);
-            await CheckSubmodulesOnOpenAsync();
-            StartAutoFetch();
+            var repo = await _factory.OpenAsync(root);
+            var session = new RepoSession(repo) { StaleKinds = RepositoryChangeKind.All };
+            repo.Changed += OnRepositoryChanged;
+            session.Undo.Changed += (_, _) =>
+            {
+                if (session == _active) Notify();
+            };
+            _sessions.Add(session);
+            if (activate) await ActivateAsync(session);
+            await PersistTabsAsync();
+            StartAutoFetch(session);
+            return session;
         }
         catch (Exception ex)
         {
-            Error("Open repository", ex);
+            if (report) Error("Open repository", ex);
+            return null;
         }
     }
 
-    public async Task CloseAsync()
+    /// <summary>Switches tabs; a background tab catches up on changes it missed.</summary>
+    public async Task ActivateAsync(RepoSession session)
     {
-        _autoFetchCts?.Cancel();
-        _historyCts?.Cancel();
-        if (Repo is not null)
-        {
-            Repo.Changed -= OnRepositoryChanged;
-            await Repo.DisposeAsync();
-        }
-
-        Repo = null;
-        Snapshot = null;
-        SubmoduleStatus = [];
-        Status = WorkingCopyStatus.Empty;
-        Rows = new AppendOnlyList<GraphRow>();
-        SelectedCommitSha = null;
-        WipSelected = false;
-        Center = CenterView.Graph;
-        OpenDiff = null;
-        HiddenRefs.Clear();
-        SoloRef = null;
-        Undo.Clear();
+        if (!_sessions.Contains(session)) return;
+        var first = session.Snapshot is null;
+        _active = session;
         Notify();
         HistoryChanged?.Invoke();
+
+        var stale = session.StaleKinds;
+        session.StaleKinds = RepositoryChangeKind.None;
+        if (stale != RepositoryChangeKind.None) await RefreshSessionAsync(session, stale);
+
+        if (first)
+        {
+            if (HasWip) SelectWip();
+            else if (Snapshot?.HeadSha is { } head) SelectCommit(head);
+            await CheckSubmodulesOnOpenAsync();
+            _ = RefreshLfsAsync(session, includeLocks: true); // network call for locks: don't block the tab
+        }
+
+        await PersistTabsAsync();
     }
 
-    /// <summary>Coalesces overlapping refresh requests: a running refresh picks up kinds queued while it works.</summary>
-    public async Task RefreshAsync(RepositoryChangeKind kind = RepositoryChangeKind.All)
+    public Task ActivateRelativeAsync(int delta)
     {
-        lock (_refreshSync) _pendingRefresh |= kind;
-        if (Interlocked.Exchange(ref _refreshing, 1) == 1) return;
+        if (_sessions.Count < 2 || _active is null) return Task.CompletedTask;
+        var i = _sessions.IndexOf(_active);
+        return ActivateAsync(_sessions[(((i + delta) % _sessions.Count) + _sessions.Count) % _sessions.Count]);
+    }
+
+    public async Task CloseTabAsync(RepoSession session)
+    {
+        var index = _sessions.IndexOf(session);
+        if (index < 0) return;
+        session.Repo.Changed -= OnRepositoryChanged;
+        _sessions.RemoveAt(index);
+        await session.DisposeAsync();
+
+        if (session == _active)
+        {
+            _active = null;
+            if (_sessions.Count > 0)
+            {
+                await ActivateAsync(_sessions[Math.Min(index, _sessions.Count - 1)]);
+            }
+            else
+            {
+                Notify();
+                HistoryChanged?.Invoke();
+            }
+        }
+        else
+        {
+            Notify();
+        }
+
+        await PersistTabsAsync();
+    }
+
+    public Task CloseActiveTabAsync() => _active is null ? Task.CompletedTask : CloseTabAsync(_active);
+
+    private Task PersistTabsAsync() =>
+        _settings.UpdateAsync(s => s with { OpenRepositories = _sessions.Select(x => x.Path).ToList(), ActiveRepository = _active?.Path });
+
+    /// <summary>Refreshes the active tab.</summary>
+    public Task RefreshAsync(RepositoryChangeKind kind = RepositoryChangeKind.All) =>
+        _active is null ? Task.CompletedTask : RefreshSessionAsync(_active, kind);
+
+    /// <summary>Coalesces overlapping refresh requests: a running refresh picks up kinds queued while it works.</summary>
+    private async Task RefreshSessionAsync(RepoSession session, RepositoryChangeKind kind)
+    {
+        lock (session.RefreshSync) session.PendingRefresh |= kind;
+        if (Interlocked.Exchange(ref session.Refreshing, 1) == 1) return;
         try
         {
             while (true)
             {
                 RepositoryChangeKind k;
-                lock (_refreshSync)
+                lock (session.RefreshSync)
                 {
-                    k = _pendingRefresh;
-                    _pendingRefresh = RepositoryChangeKind.None;
+                    k = session.PendingRefresh;
+                    session.PendingRefresh = RepositoryChangeKind.None;
                 }
 
-                var repo = Repo;
-                if (k == RepositoryChangeKind.None || repo is null) break;
+                if (k == RepositoryChangeKind.None || !_sessions.Contains(session)) break;
+                var repo = session.Repo;
 
                 var refs = (k & (RepositoryChangeKind.Refs | RepositoryChangeKind.Config)) != 0;
                 if (refs)
                 {
-                    Snapshot = await repo.Read.GetSnapshotAsync();
-                    RefIndex = Snapshot.BuildRefIndex();
-                    SubmoduleStatus = Snapshot.Submodules.Count > 0 ? await repo.Submodules.GetRecursiveStatusAsync() : [];
+                    var snapshot = await repo.Read.GetSnapshotAsync();
+                    session.Snapshot = snapshot;
+                    session.RefIndex = snapshot.BuildRefIndex();
+                    session.SubmoduleStatus = snapshot.Submodules.Count > 0 ? await repo.Submodules.GetRecursiveStatusAsync() : [];
                 }
 
-                Status = await repo.Read.GetStatusAsync();
-                if (WipSelected && Status.IsClean && Snapshot?.HeadSha is { } head) SelectCommit(head);
-                Notify();
-                if (refs) _ = LoadHistoryAsync();
+                session.Status = await repo.Read.GetStatusAsync();
+                if (session.WipSelected && session.Status.IsClean && session.Snapshot?.HeadSha is { } head)
+                {
+                    session.WipSelected = false;
+                    session.SelectedCommitSha = head;
+                }
+
+                if (session == _active) Notify();
+                if (refs)
+                {
+                    _ = LoadHistoryAsync(session);
+                    _ = RefreshLfsAsync(session, includeLocks: false); // commits/checkouts change which files are in LFS
+                }
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException and not ObjectDisposedException)
         {
             LogRefreshFailed(_log, ex);
         }
         finally
         {
-            Volatile.Write(ref _refreshing, 0);
+            Volatile.Write(ref session.Refreshing, 0);
         }
 
         bool again;
-        lock (_refreshSync) again = _pendingRefresh != RepositoryChangeKind.None;
-        if (again) await RefreshAsync(RepositoryChangeKind.None);
+        lock (session.RefreshSync) again = session.PendingRefresh != RepositoryChangeKind.None;
+        if (again) await RefreshSessionAsync(session, RepositoryChangeKind.None);
     }
 
+    /// <summary>Re-streams the active tab's history (after hide/solo changes).</summary>
+    public Task LoadHistoryAsync() => _active is null ? Task.CompletedTask : LoadHistoryAsync(_active);
+
     /// <summary>Streams history through the incremental graph layout, publishing rows in batches.</summary>
-    public async Task LoadHistoryAsync()
+    private async Task LoadHistoryAsync(RepoSession session)
     {
-        var repo = Repo;
-        if (repo is null) return;
-        _historyCts?.Cancel();
-        var cts = _historyCts = new CancellationTokenSource();
+        session.HistoryCts?.Cancel();
+        var cts = session.HistoryCts = new CancellationTokenSource();
         var rows = new AppendOnlyList<GraphRow>();
         var builder = new CommitGraphBuilder(GitForgeTheme.LaneColors.Length);
-        var query = BuildHistoryQuery();
-        HistoryLoading = true;
+        var query = BuildHistoryQuery(session);
+        session.HistoryLoading = true;
 
         try
         {
             await Task.Run(async () =>
             {
                 var nextPublish = FirstHistoryBatch;
-                await foreach (var commit in repo.Read.GetHistoryAsync(query, cts.Token))
+                await foreach (var commit in session.Repo.Read.GetHistoryAsync(query, cts.Token))
                 {
                     rows.Add(builder.Add(commit));
                     if (rows.Count >= nextPublish)
                     {
-                        Publish(rows, cts);
+                        Publish(session, rows, cts);
                         nextPublish = rows.Count + HistoryBatch;
                     }
                 }
@@ -293,74 +567,83 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         {
             return;
         }
+        catch (ObjectDisposedException)
+        {
+            return; // tab closed while loading
+        }
         catch (Exception ex)
         {
             Error("Load history", ex);
         }
 
         if (cts.IsCancellationRequested) return;
-        HistoryLoading = false;
-        Publish(rows, cts);
-        Notify();
+        session.HistoryLoading = false;
+        Publish(session, rows, cts);
+        if (session == _active) Notify();
     }
 
-    private HistoryQuery BuildHistoryQuery()
+    private static HistoryQuery BuildHistoryQuery(RepoSession session)
     {
-        if (SoloRef is { } solo) return new HistoryQuery { Refs = [solo] };
-        if (HiddenRefs.Count == 0 || Snapshot is not { } s) return new HistoryQuery();
+        if (session.SoloRef is { } solo) return new HistoryQuery { Refs = [solo] };
+        if (session.HiddenRefs.Count == 0 || session.Snapshot is not { } s) return new HistoryQuery();
 
         // Tags are left out while hiding so they cannot pull hidden branches back into the graph.
         var refs = s.LocalBranches.Concat(s.RemoteBranches)
             .Select(b => b.CanonicalName)
-            .Where(r => !HiddenRefs.Contains(r))
+            .Where(r => !session.HiddenRefs.Contains(r))
             .ToList();
-        var currentHidden = CurrentBranchHead is { } cur && HiddenRefs.Contains(cur.CanonicalName);
+        var current = s.LocalBranches.FirstOrDefault(b => b.IsCurrent);
+        var currentHidden = current is not null && session.HiddenRefs.Contains(current.CanonicalName);
         if (!currentHidden && s.HeadSha is not null) refs.Add("HEAD");
         return refs.Count == 0 ? new HistoryQuery { Refs = ["HEAD"] } : new HistoryQuery { Refs = refs };
     }
 
     public Task ToggleHiddenAsync(string canonicalRef)
     {
-        if (!HiddenRefs.Remove(canonicalRef)) HiddenRefs.Add(canonicalRef);
-        SoloRef = null;
+        if (_active is not { } s) return Task.CompletedTask;
+        if (!s.HiddenRefs.Remove(canonicalRef)) s.HiddenRefs.Add(canonicalRef);
+        s.SoloRef = null;
         Notify();
-        return LoadHistoryAsync();
+        return LoadHistoryAsync(s);
     }
 
     public Task SoloAsync(string? canonicalRef)
     {
-        SoloRef = SoloRef == canonicalRef ? null : canonicalRef;
-        HiddenRefs.Clear();
+        if (_active is not { } s) return Task.CompletedTask;
+        s.SoloRef = s.SoloRef == canonicalRef ? null : canonicalRef;
+        s.HiddenRefs.Clear();
         Notify();
-        return LoadHistoryAsync();
+        return LoadHistoryAsync(s);
     }
 
     public Task ShowAllRefsAsync()
     {
-        HiddenRefs.Clear();
-        SoloRef = null;
+        if (_active is not { } s) return Task.CompletedTask;
+        s.HiddenRefs.Clear();
+        s.SoloRef = null;
         Notify();
-        return LoadHistoryAsync();
+        return LoadHistoryAsync(s);
     }
 
-    private void Publish(AppendOnlyList<GraphRow> rows, CancellationTokenSource cts)
+    private void Publish(RepoSession session, AppendOnlyList<GraphRow> rows, CancellationTokenSource cts)
     {
         if (cts.IsCancellationRequested) return;
-        Rows = rows;
-        HistoryChanged?.Invoke();
+        session.Rows = rows;
+        if (session == _active) HistoryChanged?.Invoke();
     }
 
     // ---------- Operations ----------
 
-    /// <summary>Runs a git operation with busy state, progress text, and user-facing error reporting.</summary>
+    /// <summary>Runs a git operation on the active tab with busy state, progress text, and user-facing error reporting.</summary>
     public async Task<bool> RunAsync(string label, Func<IGitRepository, IProgress<string>, Task> operation, string? success = null)
     {
-        var repo = Repo;
-        if (repo is null) return false;
+        var session = _active;
+        if (session is null) return false;
+        var repo = session.Repo;
 
         // Capture submodule pins so submodules can follow any HEAD move (checkout, pull, merge, rebase, reset, undo…).
-        var beforeHead = Snapshot?.HeadSha;
-        var beforePins = Settings.AutoUpdateSubmodules && Snapshot is { } snap ? SubmoduleAutoUpdater.Capture(snap) : null;
+        var beforeHead = session.Snapshot?.HeadSha;
+        var beforePins = Settings.AutoUpdateSubmodules && session.Snapshot is { } snap ? SubmoduleAutoUpdater.Capture(snap) : null;
 
         BusyText = label;
         ProgressText = null;
@@ -387,7 +670,8 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         {
             BusyText = null;
             ProgressText = null;
-            await RefreshAsync(RepositoryChangeKind.All);
+            if (_sessions.Contains(session)) await RefreshSessionAsync(session, RepositoryChangeKind.All);
+            else Notify();
         }
     }
 
@@ -470,14 +754,25 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
     }
 
     /// <summary>Runs an operation that records an undo entry (Ctrl+Z reverses it).</summary>
-    public Task<bool> RunUndoableAsync(string label, Func<IGitRepository, Task<UndoEntry?>> operation, string? success = null) =>
-        RunAsync(label, async (r, _) => Undo.Record(await operation(r)), success);
+    public Task<bool> RunUndoableAsync(string label, Func<IGitRepository, Task<UndoEntry?>> operation, string? success = null)
+    {
+        var undo = Undo;
+        return RunAsync(label, async (r, _) => undo.Record(await operation(r)), success);
+    }
 
-    public Task UndoAsync() => !Undo.CanUndo ? Task.CompletedTask
-        : RunAsync($"Undoing {Undo.UndoDescription}", async (r, _) => Info($"Undid {await Undo.UndoAsync(r)}"));
+    public Task UndoAsync()
+    {
+        var undo = Undo;
+        return !undo.CanUndo ? Task.CompletedTask
+            : RunAsync($"Undoing {undo.UndoDescription}", async (r, _) => Info($"Undid {await undo.UndoAsync(r)}"));
+    }
 
-    public Task RedoAsync() => !Undo.CanRedo ? Task.CompletedTask
-        : RunAsync($"Redoing {Undo.RedoDescription}", async (r, _) => Info($"Redid {await Undo.RedoAsync(r)}"));
+    public Task RedoAsync()
+    {
+        var undo = Undo;
+        return !undo.CanRedo ? Task.CompletedTask
+            : RunAsync($"Redoing {undo.RedoDescription}", async (r, _) => Info($"Redid {await undo.RedoAsync(r)}"));
+    }
 
     public Task CheckoutAsync(string target) =>
         RunUndoableAsync($"Checking out {target}", r => UndoableOperations.CheckoutAsync(r, target));
@@ -515,22 +810,23 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
     public async Task<GitResult?> RunConsoleAsync(IReadOnlyList<string> args)
     {
-        var repo = Repo;
-        if (repo is null || args.Count == 0) return null;
-        ConsoleLines.Add("$ git " + string.Join(' ', args));
+        var session = _active;
+        if (session is null || args.Count == 0) return null;
+        var lines = session.ConsoleLines;
+        lines.Add("$ git " + string.Join(' ', args));
         BusyText = "git " + args[0];
         Notify();
         try
         {
-            var result = await Task.Run(() => repo.RunRawAsync(args));
-            foreach (var l in (result.StandardOutput + result.StandardError).Split('\n')) ConsoleLines.Add(l.TrimEnd('\r'));
-            ConsoleLines.Add($"[exit {result.ExitCode}]");
-            if (ConsoleLines.Count > 5000) ConsoleLines.RemoveRange(0, ConsoleLines.Count - 5000);
+            var result = await Task.Run(() => session.Repo.RunRawAsync(args));
+            foreach (var l in (result.StandardOutput + result.StandardError).Split('\n')) lines.Add(l.TrimEnd('\r'));
+            lines.Add($"[exit {result.ExitCode}]");
+            if (lines.Count > 5000) lines.RemoveRange(0, lines.Count - 5000);
             return result;
         }
         catch (Exception ex)
         {
-            ConsoleLines.Add("error: " + ex.Message);
+            lines.Add("error: " + ex.Message);
             return null;
         }
         finally
@@ -554,10 +850,18 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
     private async void OnRepositoryChanged(object? sender, RepositoryChangedEventArgs e)
     {
+        var session = _sessions.FirstOrDefault(s => ReferenceEquals(s.Repo, sender));
+        if (session is null) return;
+        if (session != _active)
+        {
+            session.StaleKinds |= e.Kind; // caught up when the tab is activated
+            return;
+        }
+
         if (IsBusy) return; // the operation refreshes when it completes
         try
         {
-            await RefreshAsync(e.Kind);
+            await RefreshSessionAsync(session, e.Kind);
         }
         catch (Exception ex)
         {
@@ -565,19 +869,19 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         }
     }
 
-    private void StartAutoFetch()
+    private void StartAutoFetch(RepoSession session)
     {
-        _autoFetchCts?.Cancel();
-        var cts = _autoFetchCts = new CancellationTokenSource();
+        session.AutoFetchCts?.Cancel();
+        var cts = session.AutoFetchCts = new CancellationTokenSource();
         var settings = _settings.Current;
         _ = Task.Run(async () =>
         {
             try
             {
-                if (settings.FetchOnOpen) await QuietFetchAsync(cts.Token);
+                if (settings.FetchOnOpen) await QuietFetchAsync(session, cts.Token);
                 if (settings.AutoFetchMinutes <= 0) return;
                 using var timer = new PeriodicTimer(TimeSpan.FromMinutes(settings.AutoFetchMinutes));
-                while (await timer.WaitForNextTickAsync(cts.Token)) await QuietFetchAsync(cts.Token);
+                while (await timer.WaitForNextTickAsync(cts.Token)) await QuietFetchAsync(session, cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -585,13 +889,13 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         }, cts.Token);
     }
 
-    private async Task QuietFetchAsync(CancellationToken ct)
+    private async Task QuietFetchAsync(RepoSession session, CancellationToken ct)
     {
-        var repo = Repo;
-        if (repo is null || IsBusy || Snapshot?.Remotes.Count is null or 0) return;
+        if (IsBusy || !_sessions.Contains(session)) return;
         try
         {
-            await repo.Remotes.FetchAsync(new FetchRequest(), null, ct);
+            if ((await session.Repo.QueryAsync(["remote"], ct)).StandardOutput.Trim().Length == 0) return;
+            await session.Repo.Remotes.FetchAsync(new FetchRequest(), null, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -610,8 +914,13 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await CloseAsync();
-        _historyCts?.Dispose();
-        _autoFetchCts?.Dispose();
+        foreach (var s in _sessions.ToList())
+        {
+            s.Repo.Changed -= OnRepositoryChanged;
+            await s.DisposeAsync();
+        }
+
+        _sessions.Clear();
+        _active = null;
     }
 }

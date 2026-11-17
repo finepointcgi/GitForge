@@ -1,0 +1,135 @@
+@inject RepoWorkspace W
+@inject SyntaxHighlighter Highlighter
+
+<div class="gf-fileview">
+    <div class="gf-diffpane-head">
+        <button class="gf-back" @onclick="W.ShowGraph" title="Back to graph (Esc)"><MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Size="Size.Small" /> Graph</button>
+        <MudIcon Icon="@Icons.Material.Outlined.PersonSearch" Size="Size.Small" />
+        <span class="gf-mono gf-ellipsis gf-grow" title="@_target?.Path">@_target?.Path</span>
+        <span class="gf-chip">@(_target?.Revision is { } rev ? $"at {Short(rev)}" : "working tree")</span>
+        @if (_result is { } r)
+        {
+            <span class="gf-dim gf-small">@r.Lines.Count lines · @r.Commits.Count commits</span>
+        }
+        <button class="gf-btn gf-btn-ghost" @onclick="@(() => W.ShowFileHistory(_target!.Path))">File history</button>
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+    }
+    else if (_result is { } result)
+    {
+        <div class="gf-scroll gf-code gf-blame">
+            <Virtualize Items="_rows" ItemSize="20" OverscanCount="40" Context="row">
+                <div class="gf-blame-row @(row.Start ? "start" : null) @(row.Commit.Sha == W.SelectedCommitSha ? "picked" : null)">
+                    <span class="gf-blame-gutter" style="--heat:@row.Heat" title="@(row.Commit.IsUncommitted ? "Not committed yet" : $"{row.Commit.Summary}\n{row.Commit.Author} · {row.Commit.When.LocalDateTime:g} · {row.Commit.ShortSha}")"
+                          @onclick="@(() => Pick(row.Commit))">
+                        @if (row.Start)
+                        {
+                            @if (row.Commit.IsUncommitted)
+                            {
+                                <span class="gf-blame-uncommitted">Not committed yet</span>
+                            }
+                            else
+                            {
+                                <Avatar Name="@row.Commit.Author" Email="@row.Commit.AuthorEmail" Small="true" />
+                                <span class="gf-blame-author gf-ellipsis">@row.Commit.Author</span>
+                                <span class="gf-blame-summary gf-ellipsis">@row.Commit.Summary</span>
+                                <span class="gf-blame-when">@Avatars.When(row.Commit.When)</span>
+                            }
+                        }
+                    </span>
+                    <span class="ln">@row.Line.LineNumber</span>
+                    <span class="code">@Code(row.Index)</span>
+                </div>
+            </Virtualize>
+        </div>
+    }
+</div>
+
+@code {
+    private sealed record BlameRow(int Index, BlameLine Line, BlameCommit Commit, bool Start, string Heat);
+
+    [CascadingParameter(Name = "IsDark")] public bool IsDark { get; set; }
+
+    private FileViewTarget? _target;
+    private BlameResult? _result;
+    private List<BlameRow> _rows = [];
+    private bool _loading;
+
+    // Lazy, in-order tokenization: lines are highlighted only as far down as the user has scrolled.
+    private SyntaxHighlighter.LineTokenizer? _tokenizer;
+    private string?[] _html = [];
+    private int _tokenized;
+    private bool _tokenizerDark;
+
+    private MarkupString Code(int index)
+    {
+        var text = _rows[index].Line.Text;
+        if (!W.Settings.SyntaxHighlighting || _target is null) return (MarkupString)System.Net.WebUtility.HtmlEncode(text);
+        if (_tokenizer is null || _tokenizerDark != IsDark)
+        {
+            _tokenizer = Highlighter.CreateTokenizer(_target.Path, IsDark);
+            _tokenizerDark = IsDark;
+            _html = new string?[_rows.Count];
+            _tokenized = 0;
+        }
+
+        if (_tokenizer is null) return (MarkupString)System.Net.WebUtility.HtmlEncode(text);
+        while (_tokenized <= index)
+        {
+            var line = _rows[_tokenized].Line.Text;
+            _html[_tokenized] = SyntaxHighlighter.ToHtml(line, _tokenizer.Next(line));
+            _tokenized++;
+        }
+
+        return (MarkupString)_html[index]!;
+    }
+
+    private static string Short(string rev) => rev.Length >= 40 ? rev[..8] : rev;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _target = W.OpenFileView;
+        if (_target is null || W.Repo is not { } repo) return;
+        _loading = true;
+        try
+        {
+            var target = _target;
+            _result = await Task.Run(() => repo.Read.GetBlameAsync(target.Path, target.Revision));
+            BuildRows(_result);
+        }
+        catch (Exception ex)
+        {
+            W.Error("Blame", ex);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>Groups consecutive lines from the same commit and shades the gutter by age (newer = stronger).</summary>
+    private void BuildRows(BlameResult result)
+    {
+        var committed = result.Commits.Values.Where(c => !c.IsUncommitted).Select(c => c.When.ToUnixTimeSeconds()).ToList();
+        var min = committed.Count > 0 ? committed.Min() : 0;
+        var max = committed.Count > 0 ? committed.Max() : 0;
+        string? previous = null;
+        _rows = result.Lines.Select((l, i) =>
+        {
+            var c = result.Commits[l.Sha];
+            var heat = c.IsUncommitted ? 70 : max == min ? 35 : (int)(8 + (62.0 * (c.When.ToUnixTimeSeconds() - min) / (max - min)));
+            var row = new BlameRow(i, l, c, l.Sha != previous, $"{heat}%");
+            previous = l.Sha;
+            return row;
+        }).ToList();
+    }
+
+    /// <summary>Shows the commit in the right panel without leaving the blame view.</summary>
+    private void Pick(BlameCommit c)
+    {
+        if (!c.IsUncommitted) W.SelectCommit(c.Sha);
+    }
+}

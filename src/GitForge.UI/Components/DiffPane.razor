@@ -12,7 +12,22 @@
         {
             <StatusGlyph Kind="f.Kind" />
             <span class="gf-mono gf-ellipsis gf-grow" title="@f.Path">@f.Path</span>
+            <LfsBadge Path="@f.Path" State="W.Lfs" />
             <span class="gf-chip">@(f.Area == StagingArea.Staged ? "staged" : "unstaged")</span>
+            @if (W.Lfs.Available && W.IsLfsPath(f.Path))
+            {
+                @if (W.LockFor(f.Path) is { } l)
+                {
+                    @if (l.IsOurs != false)
+                    {
+                        <button class="gf-btn gf-btn-ghost" title="Release your LFS lock" @onclick="@(() => W.UnlockFileAsync(f.Path, force: false))">Unlock</button>
+                    }
+                }
+                else
+                {
+                    <button class="gf-btn gf-btn-ghost" title="Lock this file on the LFS server so others cannot push changes to it" @onclick="@(() => W.LockFileAsync(f.Path))">Lock</button>
+                }
+            }
             @if (f.Area == StagingArea.Unstaged && f.Kind != FileChangeKind.Conflicted)
             {
                 <button class="gf-btn gf-btn-stage" @onclick="StageFile">Stage file</button>
@@ -33,11 +48,20 @@
         {
             <span class="gf-dim gf-grow">@W.OpenDiff?.Path</span>
         }
+        @if (CanInspect)
+        {
+            <MudTooltip Text="File history (follows renames)">
+                <MudIconButton Icon="@Icons.Material.Outlined.History" Size="Size.Small" OnClick="@(() => W.ShowFileHistory(W.OpenDiff!.Path))" aria-label="File history" />
+            </MudTooltip>
+            <MudTooltip Text="@(W.OpenDiff?.CommitSha is null ? "Blame (working tree)" : "Blame as of this commit")">
+                <MudIconButton Icon="@Icons.Material.Outlined.PersonSearch" Size="Size.Small" OnClick="@(() => W.ShowBlame(W.OpenDiff!.Path, W.OpenDiff.CommitSha))" aria-label="Blame" />
+            </MudTooltip>
+        }
     </div>
 
     @if (_file?.Kind == FileChangeKind.Conflicted)
     {
-        <ConflictActions Path="@_file.Path" />
+        <ConflictEditor Path="@_file.Path" @key="_file.Path" />
     }
     else
     {
@@ -48,6 +72,11 @@
 
 @code {
     private DiffTarget? _target;
+
+    // History and blame need a file that exists in history: not untracked, deleted-in-commit, or conflicted.
+    private bool CanInspect => W.OpenDiff is { } t
+        && (t.CommitFile is { Kind: not FileChangeKind.Deleted }
+            || _file is { Kind: not (FileChangeKind.Untracked or FileChangeKind.Added or FileChangeKind.Conflicted or FileChangeKind.Deleted) });
     private FileStatusEntry? _file;
     private FileDiff? _diff;
     private bool _loading;

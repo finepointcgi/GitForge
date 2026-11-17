@@ -4,8 +4,21 @@
 @inject ISettingsStore SettingsStore
 @inject IJSRuntime JS
 
-<div class="gf-graphview" id="gf-graph" style="--gf-cols:@Columns">
+@* Column widths live as CSS variables on this host element (set by the header resizers and persisted by gitforge.js);
+   it has no Blazor-managed style attribute, so re-renders never wipe a width the user dragged. *@
+<div class="gf-graph-host" id="gf-graph">
+<div class="gf-graphview" style="--gf-cols:@Columns">
     <div class="gf-graph-toolbar">
+        <MudTooltip Text="Go to the current branch (Ctrl+H)">
+            <button class="gf-icon-plain" aria-label="Go to the current branch" @onclick="W.GoToHead">
+                <MudIcon Icon="@Icons.Material.Outlined.MyLocation" Size="Size.Small" />
+            </button>
+        </MudTooltip>
+        <MudTooltip Text="Everything this branch changes, compared with the branch it came from (Ctrl+4)">
+            <button class="gf-btn gf-btn-ghost" @onclick="@(() => W.ShowBranchChanges())">
+                <MudIcon Icon="@Icons.Material.Outlined.Difference" Size="Size.Small" /> Branch changes
+            </button>
+        </MudTooltip>
         <MudIcon Icon="@Icons.Material.Outlined.Search" Size="Size.Small" Class="gf-dim" />
         <input @ref="_search" class="gf-input gf-input-ghost gf-grow" placeholder="Filter commits — text · sha · author:name · path:src/file · since:2025-01-01   (Ctrl+F)"
                value="@_query" @oninput="OnQueryInput" aria-label="Filter commits" />
@@ -33,16 +46,27 @@
         </MudMenu>
     </div>
 
-    <div class="gf-graph-head gf-graph-grid">
-        <span class="gf-col-ref gf-head-cell">Branch / Tag
-            <span class="gf-splitter gf-splitter-x gf-col-resizer" data-var="--gf-col-ref" data-target="gf-graph" data-min="90" data-max="420"></span>
-        </span>
-        <span class="gf-head-cell">Graph</span>
-        <span class="gf-head-cell">Commit message</span>
-        @if (W.Settings.ShowAuthorColumn) { <span class="gf-head-cell">Author</span> }
-        @if (W.Settings.ShowDateColumn) { <span class="gf-head-cell">Date</span> }
-        @if (W.Settings.ShowShaColumn) { <span class="gf-head-cell">SHA</span> }
-    </div>
+    @* Drag a header border to resize (double-click it to reset). Columns left of "Commit message" grow to the right,
+       columns after it grow to the left; "Commit message" takes whatever space remains. *@
+    <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true" Class="gf-graph-head-menu">
+        <ActivatorContent Context="menu">
+            <div class="gf-graph-head gf-graph-grid" title="Drag a column border to resize · double-click it to reset · right-click for columns" @oncontextmenu="@(e => menu.OpenAsync(e))">
+                <span class="gf-col-ref gf-head-cell">Branch / Tag<span class="gf-col-resize right" data-var="--gf-col-ref" data-target="gf-graph" data-dir="right" data-min="60" data-max="600"></span></span>
+                <span class="gf-head-cell">Graph<span class="gf-col-resize right" data-var="--gf-col-graph" data-target="gf-graph" data-dir="right" data-min="30" data-max="800"></span></span>
+                <span class="gf-head-cell">Commit message</span>
+                @if (W.Settings.ShowAuthorColumn) { <span class="gf-head-cell"><span class="gf-col-resize left" data-var="--gf-col-author" data-target="gf-graph" data-dir="left" data-min="60" data-max="400"></span>Author</span> }
+                @if (W.Settings.ShowDateColumn) { <span class="gf-head-cell"><span class="gf-col-resize left" data-var="--gf-col-date" data-target="gf-graph" data-dir="left" data-min="60" data-max="300"></span>Date</span> }
+                @if (W.Settings.ShowShaColumn) { <span class="gf-head-cell"><span class="gf-col-resize left" data-var="--gf-col-sha" data-target="gf-graph" data-dir="left" data-min="50" data-max="300"></span>SHA</span> }
+            </div>
+        </ActivatorContent>
+        <ChildContent>
+            <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("author"))">@(W.Settings.ShowAuthorColumn ? "✓ " : "   ")Author</MudMenuItem>
+            <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("date"))">@(W.Settings.ShowDateColumn ? "✓ " : "   ")Date / time</MudMenuItem>
+            <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("sha"))">@(W.Settings.ShowShaColumn ? "✓ " : "   ")SHA</MudMenuItem>
+            <MudDivider />
+            <MudMenuItem OnClick="ResetColumnWidths">Reset column widths</MudMenuItem>
+        </ChildContent>
+    </MudMenu>
 
     <div class="gf-scroll gf-graph-body @(W.PanelFocused ? null : "focused")" @ref="_scroller" tabindex="0" @onfocus="@(() => W.PanelFocused = false)">
         <Virtualize @ref="_virtualize" TItem="GraphItem" ItemsProvider="ProvideAsync" ItemSize="32" OverscanCount="15">
@@ -99,6 +123,7 @@
         }
     </div>
 </div>
+</div>
 
 @code {
     private readonly record struct GraphItem(int Index, GraphRow? Row, bool IsWip);
@@ -123,11 +148,14 @@
     private string WipLane => HeadRow is { } h ? Avatars.LaneColor(h.NodeColorIndex) : "var(--gf-dim)";
     private int GraphWidth => Filtered ? 36 : (int)Math.Clamp(GraphCell.Geometry.Width(_maxLanes) + 10, 40, 420);
 
+    // Defaults apply until the user drags a border; the graph default follows the widest lane count seen.
     private string Columns =>
-        $"var(--gf-col-ref, 190px) {GraphWidth}px minmax(220px, 1fr)" +
-        (W.Settings.ShowAuthorColumn ? " 150px" : string.Empty) +
-        (W.Settings.ShowDateColumn ? " 110px" : string.Empty) +
-        (W.Settings.ShowShaColumn ? " 70px" : string.Empty);
+        $"var(--gf-col-ref, 190px) var(--gf-col-graph, {GraphWidth}px) minmax(140px, 1fr)" +
+        (W.Settings.ShowAuthorColumn ? " var(--gf-col-author, 150px)" : string.Empty) +
+        (W.Settings.ShowDateColumn ? " var(--gf-col-date, 110px)" : string.Empty) +
+        (W.Settings.ShowShaColumn ? " var(--gf-col-sha, 76px)" : string.Empty);
+
+    private Task ResetColumnWidths() => JS.InvokeVoidAsync("gitforge.resetColumns", "gf-graph").AsTask();
 
     private string CountText => Filtered
         ? $"{_filtered!.Length.ToString("N0", CultureInfo.CurrentCulture)} of {W.Rows.Count.ToString("N0", CultureInfo.CurrentCulture)}"
@@ -141,6 +169,14 @@
         Shortcuts.Command += OnCommand;
         ScanLanes();
         FindHeadRow();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Returning from another view (or Go to current branch from one) remounts the graph at the top; bring the selection back into view.
+        if (!firstRender) return;
+        var i = SelectedIndex();
+        if (i > 0) await JS.InvokeVoidAsync("gitforge.scrollRowIntoView", _scroller, i, 32);
     }
 
     private IReadOnlyList<RefLabel>? Labels(string sha) => W.RefIndex.TryGetValue(sha, out var l) ? l : null;
@@ -228,9 +264,25 @@
         }
     }
 
+    private object? _scannedRows;
+    private string? _scannedRepo;
+
     private void OnHistoryChanged() => _ = InvokeAsync(async () =>
     {
-        if (_lanesScanned > W.Rows.Count) _maxLanes = 1;
+        // A new row list (re-stream or tab switch) restarts lane scanning; another repository also drops path caches.
+        if (!ReferenceEquals(_scannedRows, W.Rows))
+        {
+            _scannedRows = W.Rows;
+            _maxLanes = 1;
+            _lanesScanned = 0;
+        }
+
+        if (_scannedRepo != W.Repo?.WorkingDirectory)
+        {
+            _scannedRepo = W.Repo?.WorkingDirectory;
+            _pathCache.Clear();
+        }
+
         ScanLanes();
         _headRow = -1;
         FindHeadRow();

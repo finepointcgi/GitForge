@@ -11,7 +11,9 @@
 <MudDialogProvider />
 <MudSnackbarProvider />
 
+<CascadingValue Value="_dark" Name="IsDark">
 <div class="gf-shell @(_dark ? "dark" : "light")">
+    <RepoTabs />
     <Toolbar Dark="_dark" />
 
     @if (W.IsBusy)
@@ -40,6 +42,15 @@
                         break;
                     case CenterView.Reflog:
                         <ReflogView />
+                        break;
+                    case CenterView.FileHistory:
+                        <FileHistoryView @key="W.OpenFileView" />
+                        break;
+                    case CenterView.Blame:
+                        <BlameView @key="W.OpenFileView" />
+                        break;
+                    case CenterView.BranchChanges:
+                        <BranchChangesView @key="(W.BranchCompare, W.CurrentBranch)" />
                         break;
                     default:
                         <GraphView />
@@ -70,7 +81,13 @@
         else if (W.Snapshot is { } s)
         {
             <span class="gf-dim gf-mono gf-ellipsis">@s.WorkingDirectory</span>
-            @if (W.CurrentBranchHead is { HasUpstream: true } h)
+            @if (W.CurrentBranchHead is { IsUpstreamGone: true } g)
+            {
+                <span class="gf-status-warn" title="@g.UpstreamName was deleted on the remote (usually after its pull request merged). Your local commits are safe. Push to recreate it, or switch to another branch and delete this one.">
+                    @g.Name → @g.UpstreamName deleted on the remote
+                </span>
+            }
+            else if (W.CurrentBranchHead is { HasUpstream: true } h)
             {
                 <span class="gf-dim">@h.Name ⇄ @h.UpstreamName  ↑@(h.Ahead ?? 0) ↓@(h.Behind ?? 0)</span>
             }
@@ -87,6 +104,7 @@
         <span class="gf-dim">@_gitVersionText</span>
     </footer>
 </div>
+</CascadingValue>
 
 @code {
     private MudThemeProvider? _themeProvider;
@@ -114,14 +132,7 @@
         if (!firstRender) return;
         await Shortcuts.AttachAsync();
         await ApplyThemePreferenceAsync();
-        if (Startup.OpenPath is { Length: > 0 } requested)
-        {
-            await W.OpenAsync(requested);
-        }
-        else if (W.Settings.RecentRepositories.FirstOrDefault() is { } last && Directory.Exists(last))
-        {
-            await W.OpenAsync(last);
-        }
+        await W.RestoreTabsAsync(Startup.OpenPath);
     }
 
     private async Task ApplyThemePreferenceAsync()
@@ -170,6 +181,8 @@
                 W.ShowGraph();
                 break;
             case "view.reflog" when hasRepo: W.ShowReflog(); break;
+            case "view.changes" when hasRepo: W.ShowBranchChanges(); break;
+            case "graph.head" when hasRepo: W.GoToHead(); break;
             case "escape" when hasRepo && W.Center != CenterView.Graph: W.ShowGraph(); break;
             case "pane.next" when hasRepo:
                 W.PanelFocused = true;
@@ -179,6 +192,9 @@
                 W.PanelFocused = false;
                 W.Notify();
                 break;
+            case "tab.next": await W.ActivateRelativeAsync(+1); break;
+            case "tab.prev": await W.ActivateRelativeAsync(-1); break;
+            case "tab.close" when hasRepo: await W.CloseActiveTabAsync(); break;
             case "edit.undo" when hasRepo: await W.UndoAsync(); break;
             case "edit.redo" when hasRepo: await W.RedoAsync(); break;
             case "repo.open": await Show<OpenRepositoryDialog>("Open repository"); break;

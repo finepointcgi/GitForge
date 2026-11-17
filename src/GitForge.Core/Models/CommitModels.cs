@@ -41,6 +41,26 @@ public sealed record HistoryQuery
     public bool IsFiltered => !string.IsNullOrWhiteSpace(PathFilter) || Since is not null || Until is not null;
 }
 
+/// <summary>One commit in a file's history; <see cref="Path"/> is the file's name in that commit (renames are followed).</summary>
+public sealed record FileHistoryEntry(CommitInfo Commit, string Path, string? OldPath, FileChangeKind Kind)
+{
+    public FileChange ToChange() => new(Path, OldPath, Kind);
+}
+
+public sealed record BlameCommit(string Sha, string Author, string AuthorEmail, DateTimeOffset When, string Summary)
+{
+    /// <summary>Lines not yet committed are attributed to the all-zero SHA.</summary>
+    public bool IsUncommitted => Sha.All(c => c == '0');
+    public string ShortSha => Sha.Length > 8 ? Sha[..8] : Sha;
+}
+
+public sealed record BlameLine(int LineNumber, string Sha, string Text);
+
+public sealed record BlameResult(IReadOnlyList<BlameLine> Lines, IReadOnlyDictionary<string, BlameCommit> Commits)
+{
+    public static readonly BlameResult Empty = new([], new Dictionary<string, BlameCommit>());
+}
+
 public sealed record ReflogEntryInfo(int Index, string FromSha, string ToSha, string Message, string Committer, DateTimeOffset When)
 {
     public string Selector(string refName) => $"{refName}@{{{Index}}}";

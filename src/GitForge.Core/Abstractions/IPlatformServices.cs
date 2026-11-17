@@ -35,11 +35,17 @@ public sealed record AppSettings
     public bool AutoUpdateSubmodules { get; init; } = true;
     public int AutoFetchMinutes { get; init; } = 10;
     public bool SideBySideDiff { get; init; }
+    public bool SyntaxHighlighting { get; init; } = true;
     public bool ShowAuthorColumn { get; init; } = true;
     public bool ShowDateColumn { get; init; } = true;
     public bool ShowShaColumn { get; init; }
     public bool IgnoreWhitespace { get; init; }
     public IReadOnlyList<string> RecentRepositories { get; init; } = [];
+
+    /// <summary>Repository tabs open at the end of the last session (restored on launch).</summary>
+    public IReadOnlyList<string> OpenRepositories { get; init; } = [];
+
+    public string? ActiveRepository { get; init; }
     public IReadOnlyList<HostingAccount> Accounts { get; init; } = [];
 }
 

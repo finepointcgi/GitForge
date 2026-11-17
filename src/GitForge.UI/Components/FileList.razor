@@ -1,3 +1,4 @@
+@inject RepoWorkspace W
 <div class="gf-file-group">
     <div class="gf-group-head">
         <span class="gf-group-title">@Title</span>
@@ -12,6 +13,7 @@
                  title="@(f.OldPath is null ? f.Path : $"{f.OldPath} → {f.Path}")">
                 <StatusGlyph Kind="f.Kind" />
                 <span class="gf-ellipsis gf-grow"><span class="gf-filename">@f.FileName</span> <span class="gf-dim">@f.Directory</span></span>
+                <LfsBadge Path="@f.Path" State="W.Lfs" />
                 <span class="gf-row-actions">
                     @if (f.Area == StagingArea.Unstaged && f.Kind != FileChangeKind.Conflicted)
                     {

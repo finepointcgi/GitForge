@@ -4,7 +4,12 @@ using GitForge.Git.Submodules;
 
 namespace GitForge.Git.Tests;
 
+/// <summary>Runs alone: nested local clones plus process-wide GIT_CONFIG_* environment variables.</summary>
+[CollectionDefinition("Submodules", DisableParallelization = true)]
+public sealed class SubmoduleSerialGroup;
+
 /// <summary>Real nested submodules: super → libs/sub → nested.</summary>
+[Collection("Submodules")]
 public class SubmoduleTests
 {
     static SubmoduleTests()

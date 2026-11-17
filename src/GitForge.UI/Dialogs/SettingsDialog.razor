@@ -15,6 +15,7 @@
                 <span>Accent color <span class="gf-mono gf-dim">@_s.AccentColor</span></span>
             </div>
             <MudCheckBox T="bool" @bind-Value="_s.VimNavigation" Label="Vim-style navigation (j/k, gg/G, h/l, s/u/d)" Size="Size.Small" Dense="true" />
+            <MudCheckBox T="bool" @bind-Value="_s.SyntaxHighlighting" Label="Syntax highlighting in diffs and blame" Size="Size.Small" Dense="true" />
             <MudCheckBox T="bool" @bind-Value="_s.FetchOnOpen" Label="Fetch when a repository opens" Size="Size.Small" Dense="true" />
             <MudCheckBox T="bool" @bind-Value="_s.AutoUpdateSubmodules" Label="Update submodules automatically (recursive) after checkout, pull, merge, rebase, reset, and undo" Size="Size.Small" Dense="true" />
             <MudNumericField T="int" @bind-Value="_s.AutoFetchMinutes" Label="Auto-fetch interval (minutes, 0 = off)" Min="0" Max="240" Variant="Variant.Outlined" Margin="Margin.Dense" />
@@ -40,6 +41,7 @@
         public bool VimNavigation { get; set; }
         public bool FetchOnOpen { get; set; }
         public bool AutoUpdateSubmodules { get; set; }
+        public bool SyntaxHighlighting { get; set; }
         public int AutoFetchMinutes { get; set; }
         public string? GitExecutablePath { get; set; }
         public string? ExternalMergeTool { get; set; }
@@ -53,7 +55,7 @@
         _s = new Model
         {
             Theme = c.Theme, AccentColor = c.AccentColor, VimNavigation = c.VimNavigation, FetchOnOpen = c.FetchOnOpen,
-            AutoUpdateSubmodules = c.AutoUpdateSubmodules,
+            AutoUpdateSubmodules = c.AutoUpdateSubmodules, SyntaxHighlighting = c.SyntaxHighlighting,
             AutoFetchMinutes = c.AutoFetchMinutes, GitExecutablePath = c.GitExecutablePath, ExternalMergeTool = c.ExternalMergeTool,
         };
     }
@@ -64,7 +66,7 @@
         await SettingsStore.UpdateAsync(c => c with
         {
             Theme = m.Theme, AccentColor = m.AccentColor, VimNavigation = m.VimNavigation, FetchOnOpen = m.FetchOnOpen,
-            AutoUpdateSubmodules = m.AutoUpdateSubmodules,
+            AutoUpdateSubmodules = m.AutoUpdateSubmodules, SyntaxHighlighting = m.SyntaxHighlighting,
             AutoFetchMinutes = Math.Clamp(m.AutoFetchMinutes, 0, 240),
             GitExecutablePath = string.IsNullOrWhiteSpace(m.GitExecutablePath) ? null : m.GitExecutablePath.Trim(),
             ExternalMergeTool = string.IsNullOrWhiteSpace(m.ExternalMergeTool) ? null : m.ExternalMergeTool.Trim(),

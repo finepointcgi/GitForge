@@ -6,6 +6,8 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="MudBlazor" />
+    <PackageReference Include="TextMateSharp" />
+    <PackageReference Include="TextMateSharp.Grammars" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\GitForge.Core\GitForge.Core.csproj" />

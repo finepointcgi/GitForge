@@ -24,6 +24,7 @@ public interface IGitRepository : IAsyncDisposable
     IStashOperations Stashes { get; }
     IHistoryOperations History { get; }
     ISubmoduleOperations Submodules { get; }
+    ILfsOperations Lfs { get; }
 
     /// <summary>Runs an arbitrary git command in this repository (integrated console). Treated as a write: caches refresh.</summary>
     Task<GitResult> RunRawAsync(IReadOnlyList<string> arguments, IProgress<string>? output = null, CancellationToken cancellationToken = default);
@@ -51,6 +52,21 @@ public interface IRepositoryReader
     Task<FileDiff?> GetCommitDiffAsync(string sha, FileChange change, DiffOptions options, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ReflogEntryInfo>> GetReflogAsync(string refName = "HEAD", int max = 500, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<string>> GetUnreachableCommitsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Commits that touched <paramref name="path"/>, newest first, following renames.</summary>
+    IAsyncEnumerable<FileHistoryEntry> GetFileHistoryAsync(string path, CancellationToken cancellationToken = default);
+
+    /// <summary>Line-by-line authorship of <paramref name="path"/> at <paramref name="revision"/> (null = working tree).</summary>
+    Task<BlameResult> GetBlameAsync(string path, string? revision, CancellationToken cancellationToken = default);
+
+    /// <summary>Best common ancestor of two revisions (<c>git merge-base</c>), or null when they share no history.</summary>
+    Task<string?> GetMergeBaseAsync(string a, string b, CancellationToken cancellationToken = default);
+
+    /// <summary>Files changed from <paramref name="fromRevision"/> to <paramref name="toRevision"/>; null <paramref name="toRevision"/> means the working tree.</summary>
+    Task<IReadOnlyList<FileChange>> GetChangesBetweenAsync(string fromRevision, string? toRevision, CancellationToken cancellationToken = default);
+
+    /// <summary>Diff of one file from <paramref name="fromRevision"/> to <paramref name="toRevision"/> (null = working tree).</summary>
+    Task<FileDiff?> GetDiffBetweenAsync(string fromRevision, string? toRevision, FileChange change, DiffOptions options, CancellationToken cancellationToken = default);
 }
 
 public interface IIndexOperations
@@ -70,6 +86,21 @@ public interface IIndexOperations
     Task<string?> GetHeadMessageAsync(CancellationToken cancellationToken = default);
 
     Task ResolveConflictAsync(string path, ConflictSide side, CancellationToken cancellationToken = default);
+
+    /// <summary>The base/ours/theirs versions of a conflicted file from index stages 1–3 (null when a side does not exist).</summary>
+    Task<ConflictSides> GetConflictSidesAsync(string path, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Re-runs the three-way merge with <c>git merge-file --diff3</c> and returns the text with conflict markers,
+    /// or null when the file is binary or one side was deleted.
+    /// </summary>
+    Task<string?> GetMergeTextAsync(string path, CancellationToken cancellationToken = default);
+
+    /// <summary>Writes the resolved content to the working tree and stages it (marks the conflict resolved).</summary>
+    Task SaveResolutionAsync(string path, string content, CancellationToken cancellationToken = default);
+
+    /// <summary>Resolves a modify/delete conflict: keep the file as it is in the working tree, or delete it.</summary>
+    Task ResolveDeletionAsync(string path, bool keepFile, CancellationToken cancellationToken = default);
     Task MarkResolvedAsync(string path, CancellationToken cancellationToken = default);
     Task<GitResult> LaunchMergeToolAsync(string path, string? tool, CancellationToken cancellationToken = default);
 }
@@ -125,6 +156,26 @@ public interface IHistoryOperations
     Task<GitResult> ContinueAsync(CancellationToken cancellationToken = default);
     Task<GitResult> AbortAsync(CancellationToken cancellationToken = default);
     Task<GitResult> SkipAsync(CancellationToken cancellationToken = default);
+}
+
+/// <summary>Git LFS: tracked patterns, stored files, and server-side file locking (requires git-lfs on PATH).</summary>
+public interface ILfsOperations
+{
+    /// <summary>True when the git-lfs extension is installed.</summary>
+    Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<LfsPattern>> GetPatternsAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<LfsFile>> GetFilesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Server locks; uses <c>--verify</c> to tell yours from others', falling back to the plain list.</summary>
+    Task<LfsLockList> GetLocksAsync(CancellationToken cancellationToken = default);
+
+    Task<LfsLock> LockAsync(string path, CancellationToken cancellationToken = default);
+
+    /// <summary>Releases a lock. <paramref name="force"/> breaks someone else's lock (requires server permission).</summary>
+    Task UnlockAsync(string path, bool force, CancellationToken cancellationToken = default);
+
+    Task TrackAsync(string pattern, bool lockable, CancellationToken cancellationToken = default);
 }
 
 public interface ISubmoduleOperations

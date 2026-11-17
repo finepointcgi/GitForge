@@ -1,0 +1,233 @@
+@implements IDisposable
+@inject RepoWorkspace W
+
+<div class="gf-fileview">
+    <div class="gf-diffpane-head gf-compare-head">
+        <button class="gf-back" @onclick="W.ShowGraph" title="Back to graph (Esc)"><MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Size="Size.Small" /> Graph</button>
+        <MudIcon Icon="@Icons.Material.Outlined.Difference" Size="Size.Small" />
+        <span>Changes on <strong>@HeadLabel</strong> since it branched from</span>
+        <MudSelect T="string" Value="_base" ValueChanged="SetBaseAsync" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" Class="gf-base-select" Placeholder="Pick a branch" AnchorOrigin="Origin.BottomLeft">
+            @foreach (var (value, label) in _baseOptions)
+            {
+                <MudSelectItem T="string" Value="@value">@label</MudSelectItem>
+            }
+        </MudSelect>
+        @if (_target?.Head == "HEAD")
+        {
+            <MudCheckBox T="bool" Value="_includeWorking" ValueChanged="SetIncludeWorkingAsync" Size="Size.Small" Dense="true" Label="Include uncommitted changes" title="Adds staged and unstaged edits to tracked files" />
+        }
+        <span class="gf-spacer"></span>
+        @if (!_loading && _error is null && _base is not null)
+        {
+            <span class="gf-chip">@_commits.Count commit@(_commits.Count == 1 ? string.Empty : "s") · @_files.Count file@(_files.Count == 1 ? string.Empty : "s")</span>
+        }
+        <MudTooltip Text="Reload the comparison">
+            <button class="gf-icon-plain" aria-label="Reload the comparison" @onclick="LoadAsync"><MudIcon Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small" /></button>
+        </MudTooltip>
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+    }
+    else if (_error is not null)
+    {
+        <div class="gf-empty">@_error</div>
+    }
+    else
+    {
+        <div class="gf-split-x gf-grow-pane" id="gf-branchchanges">
+            <div class="gf-pane">
+                <div class="gf-scroll">
+                    <div class="gf-group-head"><span class="gf-group-title">Commits</span><span class="gf-count">@_commits.Count</span></div>
+                    @foreach (var c in _commits.Take(500))
+                    {
+                        <div class="gf-history-row @(c.Sha == W.SelectedCommitSha ? "selected" : null)" title="Show this commit's details in the right panel" @onclick="@(() => W.SelectCommit(c.Sha))">
+                            <Avatar Name="@c.AuthorName" Email="@c.AuthorEmail" Small="true" />
+                            <div class="gf-grow">
+                                <div class="gf-ellipsis">@c.Subject</div>
+                                <div class="gf-dim gf-small gf-ellipsis">@c.AuthorName · @Avatars.When(c.AuthorDate) · <span class="gf-mono">@c.ShortSha</span></div>
+                            </div>
+                        </div>
+                    }
+                    @if (_commits.Count == 0)
+                    {
+                        <div class="gf-empty gf-small">@(_includeWorking ? "No commits yet — only uncommitted changes." : "No commits on this branch since it diverged.")</div>
+                    }
+                    <div class="gf-group-head"><span class="gf-group-title">Files</span><span class="gf-count">@_files.Count</span></div>
+                    @foreach (var f in _files.Take(2000))
+                    {
+                        <div class="gf-file-row @(f == _file ? "selected" : null)" title="@(f.OldPath is null ? f.Path : $"{f.OldPath} → {f.Path}")" @onclick="@(() => SelectFileAsync(f))">
+                            <StatusGlyph Kind="f.Kind" />
+                            <span class="gf-ellipsis gf-grow"><span class="gf-filename">@System.IO.Path.GetFileName(f.Path)</span> <span class="gf-dim">@System.IO.Path.GetDirectoryName(f.Path)?.Replace('\\', '/')</span></span>
+                            <LfsBadge Path="@f.Path" State="W.Lfs" />
+                        </div>
+                    }
+                    @if (_files.Count == 0)
+                    {
+                        <div class="gf-empty gf-small">No file changes.</div>
+                    }
+                </div>
+            </div>
+            <div class="gf-splitter gf-splitter-x" data-var="--gf-files-w" data-target="gf-branchchanges" data-min="240" data-max="900"></div>
+            <div class="gf-pane">
+                <DiffViewer Diff="_diff" Loading="_diffLoading" Title="@_file?.Path" Placeholder="Select a file to see everything this branch changed in it" />
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private BranchCompareTarget? _target;
+    private readonly List<(string Value, string Label)> _baseOptions = [];
+    private string? _base;
+    private string? _mergeBase;
+    private bool _includeWorking;
+    private readonly List<CommitInfo> _commits = [];
+    private IReadOnlyList<FileChange> _files = [];
+    private FileChange? _file;
+    private FileDiff? _diff;
+    private bool _loading, _diffLoading;
+    private string? _error;
+    private CancellationTokenSource _cts = new();
+
+    private string HeadLabel => _target?.Head == "HEAD" ? W.CurrentBranch ?? "HEAD" : _target?.Head ?? string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _target = W.BranchCompare;
+        if (_target is null || W.Snapshot is not { } snapshot) return;
+        _includeWorking = _target.IncludeWorkingTree;
+        BuildBaseOptions(snapshot);
+        _base = _target.Base ?? DefaultBase(snapshot);
+        await LoadAsync();
+    }
+
+    /// <summary>Upstream first, then the usual trunk names (remote copies before local ones), then every other branch.</summary>
+    private void BuildBaseOptions(RepositorySnapshot s)
+    {
+        var headName = HeadLabel;
+        var head = s.LocalBranches.FirstOrDefault(b => b.Name == headName);
+        var seen = new HashSet<string>(StringComparer.Ordinal) { headName };
+        void Add(string value, string label)
+        {
+            if (seen.Add(value)) _baseOptions.Add((value, label));
+        }
+
+        if (head is { UpstreamName: { } up, IsUpstreamGone: false }) Add(up, $"{up} (upstream: unpushed commits)");
+        foreach (var trunk in Trunks)
+        {
+            foreach (var r in s.RemoteBranches.Where(r => r.Name.EndsWith("/" + trunk, StringComparison.Ordinal)).OrderBy(r => r.RemoteName == "origin" ? 0 : 1)) Add(r.Name, r.Name);
+            if (s.LocalBranches.Any(b => b.Name == trunk)) Add(trunk, trunk);
+        }
+
+        foreach (var b in s.LocalBranches) Add(b.Name, b.Name);
+        foreach (var b in s.RemoteBranches) Add(b.Name, b.Name);
+    }
+
+    private static readonly string[] Trunks = ["main", "master", "develop", "trunk"];
+
+    /// <summary>On a trunk branch, compare with its upstream (unpushed work); otherwise with the trunk it most likely came from.</summary>
+    private string? DefaultBase(RepositorySnapshot s)
+    {
+        var onTrunk = Trunks.Contains(HeadLabel);
+        var head = s.LocalBranches.FirstOrDefault(b => b.Name == HeadLabel);
+        if (onTrunk) return head is { UpstreamName: { } up, IsUpstreamGone: false } ? up : null;
+        return _baseOptions.Select(o => o.Value).FirstOrDefault(v => Trunks.Any(t => v == t || v.EndsWith("/" + t, StringComparison.Ordinal)))
+               ?? _baseOptions.FirstOrDefault().Value;
+    }
+
+    private async Task SetBaseAsync(string value)
+    {
+        _base = value;
+        await LoadAsync();
+    }
+
+    private async Task SetIncludeWorkingAsync(bool value)
+    {
+        _includeWorking = value;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _cts.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+        _commits.Clear();
+        _files = [];
+        _file = null;
+        _diff = null;
+        _error = null;
+
+        if (_target is null || W.Repo is not { } repo) return;
+        if (_base is null)
+        {
+            _error = Trunks.Contains(HeadLabel)
+                ? $"{HeadLabel} has no upstream to compare with. Pick a branch above."
+                : "Pick a branch above to compare with.";
+            return;
+        }
+
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var head = _target.Head;
+            var baseRef = _base;
+            _mergeBase = await Task.Run(() => repo.Read.GetMergeBaseAsync(baseRef, head, ct), ct);
+            if (_mergeBase is null)
+            {
+                _error = $"{HeadLabel} and {_base} share no history.";
+                return;
+            }
+
+            var to = _includeWorking ? null : head;
+            var mergeBase = _mergeBase;
+            await foreach (var c in repo.Read.GetHistoryAsync(new HistoryQuery { StartRef = $"{mergeBase}..{head}", AllRefs = false }, ct)) _commits.Add(c);
+            _files = await Task.Run(() => repo.Read.GetChangesBetweenAsync(mergeBase, to, ct), ct);
+            if (_files.Count > 0) await SelectFileAsync(_files[0]);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not compare: " + (ex is GitCommandException g ? g.GitMessage : ex.Message);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SelectFileAsync(FileChange f)
+    {
+        if (W.Repo is not { } repo || _mergeBase is null || _target is null) return;
+        _file = f;
+        _diffLoading = true;
+        StateHasChanged();
+        try
+        {
+            var mergeBase = _mergeBase;
+            var to = _includeWorking ? null : _target.Head;
+            var options = new DiffOptions(W.Settings.IgnoreWhitespace);
+            var diff = await Task.Run(() => repo.Read.GetDiffBetweenAsync(mergeBase, to, f, options));
+            if (_file == f) _diff = diff;
+        }
+        catch (Exception ex)
+        {
+            W.Error("Load diff", ex);
+        }
+        finally
+        {
+            _diffLoading = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

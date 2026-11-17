@@ -17,7 +17,7 @@ flowchart LR
         Shell["GitForgeApp shell<br/>toolbar · sidebar · 3 panes"]
         WS["RepoWorkspace<br/>per-window state"]
         KB["ShortcutService<br/>+ gitforge.js"]
-        Views["LeftPanel · GraphView · CommitPanel<br/>DiffPane · ReflogView · CommandPalette"]
+        Views["RepoTabs · LeftPanel · GraphView · CommitPanel<br/>DiffPane · ConflictEditor · FileHistoryView · BlameView<br/>ReflogView · CommandPalette"]
     end
 
     subgraph Core["GitForge.Core (no I/O)"]
@@ -148,6 +148,8 @@ record RepositorySnapshot(string WorkingDirectory, string Name, string? HeadBran
                           IReadOnlyList<SubmoduleInfo> Submodules);
 ```
 
+`BranchHead.IsUpstreamGone` is true when an upstream is configured but its remote-tracking ref no longer exists (shown as **remote deleted**). Bulk clean-up uses `git branch -d`, which refuses branches whose commits are not in the current branch, so it never discards work.
+
 ### Diff and partial staging
 
 ```csharp
@@ -168,6 +170,30 @@ Forward patches (stage) must match the old side: unselected deletions become con
 ### UI model
 
 The window is three resizable panes. The left panel lists refs (local branches grouped into folders, remotes, pull requests, tags, stashes, submodules). The center shows the commit graph by default; a diff or the reflog opens over it and Esc returns. The right commit panel follows the selection: the **WIP row** (uncommitted changes, drawn as a dashed node directly above HEAD) shows unstaged/staged files and the commit message (summary + description); a commit shows its details and changed files. `RepoWorkspace` owns this selection state (`WipSelected`, `SelectedCommitSha`, `Center`, `OpenDiff`) plus hide/solo ref filters, which re-stream history with an explicit tip list passed to `git log --stdin`.
+
+### Tabs
+
+Each open repository is a `RepoSession` (git handle, snapshot, graph rows, selection, undo journal, ref filters, LFS state, refresh bookkeeping). `RepoWorkspace` holds the list and the active session and exposes the active session's state through the same properties components already bind to. File-system events for background tabs are recorded as stale change kinds and applied when the tab is activated. Open tabs and the active tab are persisted in settings and restored on launch; a command-line path opens (or switches to) its own tab.
+
+### Conflict editor
+
+`IIndexOperations.GetMergeTextAsync` reads index stages 1–3 (`git show :N:path`) and re-runs `git merge-file -p --diff3` on temporary copies, so the editor always starts from git's own merge regardless of edits to the working file. `GitForge.Core.Merge.MergeDocument` parses the diff3 markers into common text and conflicts, records a choice per conflict (mine, theirs, both in either order, base, or hand-edited), and renders the result with the file's original line endings. Saving writes the file (keeping CRLF if the working copy used it) and stages it. Modify/delete conflicts offer keep or delete (`git rm`).
+
+### Branch changes
+
+`ShowBranchChanges` opens a center view comparing a branch with a base (default: upstream on trunk branches; otherwise `origin/main`, `main`, `master`, `develop`, or `trunk`). It resolves `git merge-base`, lists commits with `git log <merge-base>..<head>`, and diffs `git diff <merge-base> [<head>]`; omitting `<head>` includes uncommitted changes to tracked files. Revisions are rejected if they could be parsed as options.
+
+### File history and blame
+
+`GetFileHistoryAsync` streams `git log --follow --name-status`, carrying each commit's path for that commit so diffs resolve across renames. `GetBlameAsync` parses `git blame --porcelain` at the working tree (uncommitted lines get the all-zero SHA) or any revision. The blame gutter is shaded by commit age; clicking it shows that commit in the right panel.
+
+### Syntax highlighting
+
+`SyntaxHighlighter` wraps TextMateSharp (MIT; VS Code TextMate grammars and the Dark+/Light+ themes; native Oniguruma regex engine for win-x64/x86/arm64). `DiffHighlighter` tokenizes each hunk as two streams (old side: context and deletions; new side: context and additions) so multi-line comments and strings stay correct, and advances a stream only as far as the rows the virtualized view renders. Output is HTML-encoded run by run, and theme colors are validated before reaching a style attribute. Lines over 2,000 characters are shown plain.
+
+### Git LFS
+
+`ILfsOperations` drives the git-lfs CLI (3.x): `lfs track` for patterns (including `lockable`), `lfs ls-files --json` for stored files, `lfs locks --verify --json` to split locks into yours and others' (falling back to the plain list), and `lfs lock`/`unlock [--force]`. LFS state is loaded only for repositories whose root `.gitattributes` routes files through LFS. Lock calls use the user's normal git credentials; server errors are shown in the panel instead of failing the view.
 
 ### Undo
 
@@ -193,4 +219,4 @@ The window is three resizable panes. The left panel lists refs (local branches g
 - Windows 10 version 1809 (build 17763) or later, or Windows 11, x64, with the WebView2 runtime (built into Windows 11). The desktop host targets `net10.0-windows10.0.17763.0` because the WebView2 SDK's WPF assembly references the Windows SDK projection (`Microsoft.Windows.SDK.NET`).
 - .NET 10 SDK to build; .NET 10 runtime to run.
 - Git for Windows 2.39 or later on `PATH` (tested with 2.52). GitForge warns in the status bar when Git is missing or too old.
-- Key packages: MudBlazor 9.14.0, LibGit2Sharp 0.32.0, Microsoft.AspNetCore.Components.WebView.Wpf 10.0.130, xunit.v3 4.0.3.
+- Key packages: MudBlazor 9.14.0, LibGit2Sharp 0.32.0, TextMateSharp 2.0.5 (+ Grammars), Microsoft.AspNetCore.Components.WebView.Wpf 10.0.130, xunit.v3 4.0.3. Git LFS features need git-lfs 3.x (bundled with Git for Windows; tested with 3.7.1).
