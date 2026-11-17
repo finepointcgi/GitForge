@@ -168,7 +168,8 @@ body.gf-col-resizing, body.gf-col-resizing * { cursor: col-resize !important; us
 .gf-graph { display: block; overflow: visible; }
 .gf-graph path { fill: none; stroke-width: 2.5; stroke-linecap: round; }
 .gf-ref-connector { stroke-width: 1.5; opacity: .75; }
-.gf-wip-link { stroke-width: 2; stroke-dasharray: 3 3; }
+/* 4 + 4 divides the 32 px row height, so the WIP connector's dashes line up across rows. */
+.gf-graph .gf-wip-link { stroke-width: 2; stroke-dasharray: 4 4; stroke-linecap: butt; }
 .gf-avatar-node { stroke: var(--gf-bg-0); stroke-width: 2; }
 .gf-avatar-text { fill: #fff; font: 700 9px system-ui, "Segoe UI", sans-serif; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .gf-head-ring { stroke-width: 2; }

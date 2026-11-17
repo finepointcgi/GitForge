@@ -73,9 +73,9 @@
             <ItemContent Context="item">
                 @if (item.IsWip)
                 {
-                    <div class="gf-grow-row gf-graph-grid wip @(W.WipSelected ? "selected" : null)" style="--gf-lane:@WipLane" @onclick="@(() => SelectWip(item.Index))">
+                    <div class="gf-grow-row gf-graph-grid wip @(W.WipSelected ? "selected" : null)" style="--gf-lane:@WipColor" @onclick="@(() => SelectWip(item.Index))">
                         <span class="gf-col-ref"></span>
-                        <span class="gf-col-graph"><WipGraphCell HeadRow="HeadRow" /></span>
+                        <span class="gf-col-graph"><WipGraphCell Lane="@Math.Max(_wipLane, 0)" Color="@WipColor" LinkDown="@(_wipLane >= 0)" /></span>
                         <span class="gf-col-msg">
                             <span class="gf-wip-label">// WIP</span>
                             <WipStats Status="W.Status" />
@@ -98,7 +98,8 @@
                                 <span class="gf-col-graph">
                                     @if (!Filtered)
                                     {
-                                        <GraphCell Row="item.Row" IsHead="@(c.Sha == W.Snapshot?.HeadSha)" HasRefs="@(labels is { Count: > 0 })" WipAbove="@(item.Index == WipIndex + 1 && WipIndex >= 0)" />
+                                        <GraphCell Row="item.Row" IsHead="@(c.Sha == W.Snapshot?.HeadSha)" HasRefs="@(labels is { Count: > 0 })"
+                                                   WipLane="@WipLaneAt(item.Row)" WipColor="@WipColor" />
                                     }
                                 </span>
                                 <span class="gf-col-msg gf-ellipsis" title="@c.Subject">@c.Subject</span>
@@ -137,16 +138,19 @@
     private int _maxLanes = 1;
     private int _lanesScanned;
     private int _headRow = -1;
+    private int _wipLane = -1;
     private string? _headRowSha;
     private CancellationTokenSource? _filterCts;
     private readonly Dictionary<string, HashSet<string>> _pathCache = new(StringComparer.Ordinal);
 
     private bool Filtered => _filtered is not null;
-    private int WipIndex => !Filtered && W.HasWip ? Math.Max(_headRow, 0) : -1;
+    // The WIP row is always the first row; a dashed connector runs from it down to HEAD in _wipLane (-1 while HEAD is not in the graph).
+    private int WipIndex => !Filtered && W.HasWip ? 0 : -1;
     private int VisibleCount => _filtered?.Length ?? W.Rows.Count + (WipIndex >= 0 ? 1 : 0);
     private GraphRow? HeadRow => _headRow >= 0 && _headRow < W.Rows.Count ? W.Rows[_headRow] : null;
-    private string WipLane => HeadRow is { } h ? Avatars.LaneColor(h.NodeColorIndex) : "var(--gf-dim)";
-    private int GraphWidth => Filtered ? 36 : (int)Math.Clamp(GraphCell.Geometry.Width(_maxLanes) + 10, 40, 420);
+    private string WipColor => HeadRow is { } h ? Avatars.LaneColor(h.NodeColorIndex) : "var(--gf-dim)";
+    private int WipLaneAt(GraphRow row) => WipIndex >= 0 && _wipLane >= 0 && row.RowIndex <= _headRow ? _wipLane : -1;
+    private int GraphWidth => Filtered ? 36 : (int)Math.Clamp(GraphCell.Geometry.Width(Math.Max(_maxLanes, WipIndex >= 0 ? _wipLane + 1 : 0)) + 10, 40, 420);
 
     // Defaults apply until the user drags a border; the graph default follows the widest lane count seen.
     private string Columns =>
@@ -252,6 +256,7 @@
         if (head == _headRowSha && _headRow >= 0 && _headRow < W.Rows.Count && W.Rows[_headRow].Commit.Sha == head) return;
         _headRowSha = head;
         _headRow = -1;
+        _wipLane = -1;
         if (head is null) return;
         var rows = W.Rows;
         for (var i = 0; i < rows.Count; i++)
@@ -259,6 +264,7 @@
             if (rows[i].Commit.Sha == head)
             {
                 _headRow = i;
+                _wipLane = WorkingTreeLane.Choose(rows, i);
                 return;
             }
         }
@@ -297,7 +303,7 @@
     private void OnChanged() => _ = InvokeAsync(async () =>
     {
         FindHeadRow();
-        // Only re-query rows when the WIP row appears/disappears or moves; selection changes just re-render.
+        // Re-query rows only when the WIP row appears or disappears, or HEAD moves; selection changes just re-render.
         if ((_lastHasWip != W.HasWip || _lastHeadRow != _headRow) && _virtualize is not null)
         {
             _lastHasWip = W.HasWip;

@@ -104,6 +104,46 @@ public class CommitGraphBuilderTests
     }
 
     [Fact]
+    public void WipLane_HeadIsTopRow_UsesHeadLane()
+    {
+        var rows = Layout(C("head", "base"), C("base"));
+        Assert.Equal(0, WorkingTreeLane.Choose(rows, 0));
+    }
+
+    [Fact]
+    public void WipLane_NewerBranchOnAnotherLane_UsesHeadLane()
+    {
+        // "other" is newer and lays out on lane 0; HEAD branches from base on lane 1, which nothing above uses.
+        var rows = Layout(C("other2", "other1"), C("other1", "base"), C("head", "base"), C("base"));
+        Assert.Equal(1, rows[2].NodeLane);
+        Assert.Equal(1, WorkingTreeLane.Choose(rows, 2));
+    }
+
+    [Fact]
+    public void WipLane_HeadBehindUpstream_AvoidsTheUpstreamLine()
+    {
+        // HEAD's own lane carries the upstream commits above it, so the connector takes the next free lane.
+        var rows = Layout(C("up2", "up1"), C("up1", "head"), C("head", "base"), C("base"));
+        Assert.Equal(0, rows[2].NodeLane);
+        Assert.Equal(1, WorkingTreeLane.Choose(rows, 2));
+    }
+
+    [Fact]
+    public void WipLane_TakesLeftMostLaneFreeInEveryRowAboveHead()
+    {
+        GraphRow Row(int i, int lane, params GraphEdge[] edges) => new(i, C($"r{i}"), lane, 0, edges, 3);
+        var rows = new[]
+        {
+            Row(0, 0, new GraphEdge(EdgeKind.OutOfNode, 0, 0, 0)),
+            Row(1, 2, new GraphEdge(EdgeKind.PassThrough, 0, 0, 0), new GraphEdge(EdgeKind.OutOfNode, 2, 2, 1)),
+            Row(2, 0, new GraphEdge(EdgeKind.IntoNode, 0, 0, 0), new GraphEdge(EdgeKind.PassThrough, 2, 2, 1)),
+        };
+
+        Assert.Equal(1, WorkingTreeLane.Choose(rows, 2));
+        Assert.Throws<ArgumentOutOfRangeException>(() => WorkingTreeLane.Choose(rows, 3));
+    }
+
+    [Fact]
     public void Geometry_ProducesStraightAndCurvedPaths()
     {
         var g = new GraphGeometry(LaneWidth: 10, RowHeight: 20);

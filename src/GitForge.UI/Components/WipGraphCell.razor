@@ -1,26 +1,23 @@
-@* The WIP row: a dashed node above HEAD. Lanes passing between the rows above and HEAD continue through it. *@
+@* The WIP row, always at the top of the graph: a dashed node with a dashed link down toward HEAD. *@
 @{
     var g = GraphCell.Geometry;
-    var lane = HeadRow?.NodeLane ?? 0;
-    var cx = g.X(lane);
+    var cx = g.X(Lane);
     var cy = g.RowHeight / 2;
-    var laneCount = Math.Max(HeadRow?.LaneCount ?? 1, lane + 1);
-    var color = HeadRow is null ? "var(--gf-dim)" : Avatars.LaneColor(HeadRow.NodeColorIndex);
 }
-<svg class="gf-graph" width="@F(g.Width(laneCount))" height="@F(g.RowHeight)" aria-hidden="true">
-    @if (HeadRow is not null)
+<svg class="gf-graph" width="@F(g.Width(Lane + 1))" height="@F(g.RowHeight)" aria-hidden="true">
+    @if (LinkDown)
     {
-        @foreach (var e in HeadRow.Edges.Where(e => e.Kind is EdgeKind.PassThrough or EdgeKind.IntoNode && e.FromLane != lane))
-        {
-            <path d="@($"M{F(g.X(e.FromLane))},0 L{F(g.X(e.FromLane))},{F(g.RowHeight)}")" stroke="@Avatars.LaneColor(e.ColorIndex)" />
-        }
-        <line class="gf-wip-link" x1="@F(cx)" y1="@F(cy + g.NodeRadius)" x2="@F(cx)" y2="@F(g.RowHeight)" stroke="@color" />
+        <line class="gf-wip-link" x1="@F(cx)" y1="@F(cy + g.NodeRadius)" x2="@F(cx)" y2="@F(g.RowHeight)" stroke="@Color" />
     }
-    <circle cx="@F(cx)" cy="@F(cy)" r="@F(g.NodeRadius)" class="gf-wip-node" stroke="@color" />
+    <circle cx="@F(cx)" cy="@F(cy)" r="@F(g.NodeRadius)" class="gf-wip-node" stroke="@Color" />
 </svg>
 
 @code {
-    [Parameter] public GraphRow? HeadRow { get; set; }
+    [Parameter] public int Lane { get; set; }
+    [Parameter] public string Color { get; set; } = "var(--gf-dim)";
+
+    /// <summary>HEAD is in the graph: draw the start of the dashed connector.</summary>
+    [Parameter] public bool LinkDown { get; set; }
 
     private static string F(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
 }

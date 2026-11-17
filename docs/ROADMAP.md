@@ -42,6 +42,7 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 - ✅ File history (follows renames) and blame (working tree or any revision, age-shaded gutter).
 - ✅ Branch changes view (Ctrl+4): commits and combined diff since the merge base with a chosen branch, optionally including uncommitted work.
 - ✅ Resizable graph columns (drag header borders; double-click or header menu to reset; persisted).
+- ✅ WIP row pinned to the top of the graph with a dashed connector to HEAD that never runs along another branch line.
 - ✅ Plain-language "remote deleted" branches: explanation, push again, stop tracking, and safe bulk clean-up (`git branch -d`).
 - ⬜ Multi-select cherry-pick; compare any two commits (branch-to-branch is covered by the branch changes view).
 - ⬜ Stash preview pane and hunk-level stash (`git stash push --patch` equivalent via patches).

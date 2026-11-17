@@ -5,14 +5,16 @@
     var cy = g.RowHeight / 2;
     var color = Avatars.LaneColor(Row.NodeColorIndex);
 }
-<svg class="gf-graph" width="@F(g.Width(Row.LaneCount))" height="@F(g.RowHeight)" aria-hidden="true">
+<svg class="gf-graph" width="@F(g.Width(Math.Max(Row.LaneCount, WipLane + 1)))" height="@F(g.RowHeight)" aria-hidden="true">
     @if (HasRefs && cx > g.NodeRadius)
     {
         <line class="gf-ref-connector" x1="0" y1="@F(cy)" x2="@F(cx - g.NodeRadius)" y2="@F(cy)" stroke="@color" />
     }
-    @if (WipAbove)
+    @if (WipLane >= 0)
     {
-        <line class="gf-wip-link" x1="@F(cx)" y1="0" x2="@F(cx)" y2="@F(cy - g.NodeRadius)" stroke="@color" />
+        @* Rows above HEAD carry the connector straight down; the HEAD row bends it into the node. *@
+        <path class="gf-wip-link" fill="none" stroke="@(WipColor ?? color)"
+              d="@(IsHead ? g.PathFor(new GraphEdge(EdgeKind.IntoNode, WipLane, Row.NodeLane, 0), Row.NodeLane) : g.PathFor(new GraphEdge(EdgeKind.PassThrough, WipLane, WipLane, 0), Row.NodeLane))" />
     }
     @foreach (var e in Row.Edges)
     {
@@ -41,8 +43,11 @@
     [Parameter] public bool IsHead { get; set; }
     [Parameter] public bool HasRefs { get; set; }
 
-    /// <summary>The WIP row sits directly above this (HEAD) row: draw the dashed link into the node.</summary>
-    [Parameter] public bool WipAbove { get; set; }
+    /// <summary>Lane of the dashed WIP → HEAD connector crossing this row (HEAD itself or a row above it); -1 for none.</summary>
+    [Parameter] public int WipLane { get; set; } = -1;
+
+    /// <summary>Connector color (HEAD's lane color); defaults to this row's color.</summary>
+    [Parameter] public string? WipColor { get; set; }
 
     private static string F(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
 }

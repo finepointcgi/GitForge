@@ -248,21 +248,24 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
     public BranchCompareTarget? BranchCompare => _active?.BranchCompare;
 
-    /// <summary>Back to the graph with the current branch selected and scrolled into view (the WIP row when there are changes).</summary>
+    /// <summary>
+    /// Back to the graph with the current branch's commit selected and scrolled into view. (The WIP row is always the
+    /// top row; on an unborn branch, which has no commit yet, it is selected instead.)
+    /// </summary>
     public void GoToHead()
     {
         if (_active is not { } s) return;
         s.Center = CenterView.Graph;
         s.OpenDiff = null;
-        if (HasWip)
-        {
-            s.WipSelected = true;
-            s.SelectedCommitSha = null;
-        }
-        else if (s.Snapshot?.HeadSha is { } head)
+        if (s.Snapshot?.HeadSha is { } head)
         {
             s.WipSelected = false;
             s.SelectedCommitSha = head;
+        }
+        else if (HasWip)
+        {
+            s.WipSelected = true;
+            s.SelectedCommitSha = null;
         }
 
         Notify();

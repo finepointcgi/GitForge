@@ -2,7 +2,7 @@
 
 A fast, keyboard-first Git client for Windows, built with C#/.NET 10, Blazor, and MudBlazor. It is designed as a lightweight replacement for Sourcetree, with GitHub, GitLab, Bitbucket, and Azure DevOps integration (cloud and self-hosted).
 
-- **Graph-centric workspace:** refs on the left, the commit graph in the center (with a WIP row for uncommitted work), and a commit panel on the right for staging, messages, and commit details.
+- **Graph-centric workspace:** refs on the left, the commit graph in the center (with a WIP row for uncommitted work, always at the top and joined to your branch by a dashed line), and a commit panel on the right for staging, messages, and commit details.
 - **Fast on big repositories:** streamed history, incremental graph layout, and virtualized lists and diffs.
 - **High-velocity staging:** hunk- and line-level stage, unstage, and discard from the keyboard.
 - **Undo/redo (Ctrl+Z / Ctrl+Y):** commit, checkout, branch create/delete, reset, and discard (including untracked files).

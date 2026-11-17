@@ -159,6 +159,40 @@ public sealed class CommitGraphBuilder
     }
 }
 
+/// <summary>Placement of the WIP (uncommitted changes) row, which is always drawn above the first commit and linked to HEAD.</summary>
+public static class WorkingTreeLane
+{
+    /// <summary>
+    /// The lane for the dashed WIP → HEAD connector: HEAD's own lane when no row above HEAD uses it, otherwise the
+    /// left-most lane that no row above HEAD uses, so the connector never runs over another branch line.
+    /// </summary>
+    public static int Choose(IReadOnlyList<GraphRow> rows, int headRow)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        ArgumentOutOfRangeException.ThrowIfNegative(headRow);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(headRow, rows.Count);
+
+        var used = new List<bool>();
+        void Mark(int lane)
+        {
+            while (used.Count <= lane) used.Add(false);
+            used[lane] = true;
+        }
+
+        for (var r = 0; r < headRow; r++)
+        {
+            var row = rows[r];
+            Mark(row.NodeLane);
+            foreach (var e in row.Edges) Mark(e.Kind == EdgeKind.OutOfNode ? e.ToLane : e.FromLane);
+        }
+
+        var headLane = rows[headRow].NodeLane;
+        if (headLane >= used.Count || !used[headLane]) return headLane;
+        var free = used.IndexOf(false);
+        return free >= 0 ? free : used.Count;
+    }
+}
+
 /// <summary>Pixel geometry for rendering rows as SVG paths. Pure math, shared by every renderer.</summary>
 public sealed record GraphGeometry(double LaneWidth = 14, double RowHeight = 26, double NodeRadius = 4)
 {
