@@ -1,0 +1,385 @@
+@implements IAsyncDisposable
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+@inject ISettingsStore SettingsStore
+@inject IJSRuntime JS
+
+<div class="gf-graphview" id="gf-graph" style="--gf-cols:@Columns">
+    <div class="gf-graph-toolbar">
+        <MudIcon Icon="@Icons.Material.Outlined.Search" Size="Size.Small" Class="gf-dim" />
+        <input @ref="_search" class="gf-input gf-input-ghost gf-grow" placeholder="Filter commits — text · sha · author:name · path:src/file · since:2025-01-01   (Ctrl+F)"
+               value="@_query" @oninput="OnQueryInput" aria-label="Filter commits" />
+        @if (_filterBusy)
+        {
+            <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+        }
+        @if (W.IsFilteringRefs)
+        {
+            <span class="gf-chip warn">@(W.SoloRef is { } solo ? $"Solo: {ShortRef(solo)}" : $"{W.HiddenRefs.Count} hidden")</span>
+            <button class="gf-link-button" @onclick="W.ShowAllRefsAsync">Show all</button>
+        }
+        <span class="gf-dim gf-nowrap gf-small">@CountText</span>
+        <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+            <ActivatorContent Context="menu">
+                <button class="gf-icon-plain" title="Graph columns" aria-label="Graph columns" @onclick="@(e => menu.ToggleAsync(e))">
+                    <MudIcon Icon="@Icons.Material.Outlined.ViewColumn" Size="Size.Small" />
+                </button>
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("author"))">@(W.Settings.ShowAuthorColumn ? "✓ " : "   ")Author</MudMenuItem>
+                <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("date"))">@(W.Settings.ShowDateColumn ? "✓ " : "   ")Date / time</MudMenuItem>
+                <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("sha"))">@(W.Settings.ShowShaColumn ? "✓ " : "   ")SHA</MudMenuItem>
+            </ChildContent>
+        </MudMenu>
+    </div>
+
+    <div class="gf-graph-head gf-graph-grid">
+        <span class="gf-col-ref gf-head-cell">Branch / Tag
+            <span class="gf-splitter gf-splitter-x gf-col-resizer" data-var="--gf-col-ref" data-target="gf-graph" data-min="90" data-max="420"></span>
+        </span>
+        <span class="gf-head-cell">Graph</span>
+        <span class="gf-head-cell">Commit message</span>
+        @if (W.Settings.ShowAuthorColumn) { <span class="gf-head-cell">Author</span> }
+        @if (W.Settings.ShowDateColumn) { <span class="gf-head-cell">Date</span> }
+        @if (W.Settings.ShowShaColumn) { <span class="gf-head-cell">SHA</span> }
+    </div>
+
+    <div class="gf-scroll gf-graph-body @(W.PanelFocused ? null : "focused")" @ref="_scroller" tabindex="0" @onfocus="@(() => W.PanelFocused = false)">
+        <Virtualize @ref="_virtualize" TItem="GraphItem" ItemsProvider="ProvideAsync" ItemSize="32" OverscanCount="15">
+            <ItemContent Context="item">
+                @if (item.IsWip)
+                {
+                    <div class="gf-grow-row gf-graph-grid wip @(W.WipSelected ? "selected" : null)" style="--gf-lane:@WipLane" @onclick="@(() => SelectWip(item.Index))">
+                        <span class="gf-col-ref"></span>
+                        <span class="gf-col-graph"><WipGraphCell HeadRow="HeadRow" /></span>
+                        <span class="gf-col-msg">
+                            <span class="gf-wip-label">// WIP</span>
+                            <WipStats Status="W.Status" />
+                        </span>
+                        @if (W.Settings.ShowAuthorColumn) { <span></span> }
+                        @if (W.Settings.ShowDateColumn) { <span></span> }
+                        @if (W.Settings.ShowShaColumn) { <span></span> }
+                    </div>
+                }
+                else
+                {
+                    var c = item.Row!.Commit;
+                    var labels = Labels(c.Sha);
+                    <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
+                        <ActivatorContent Context="menu">
+                            <div class="gf-grow-row gf-graph-grid @(c.Sha == W.SelectedCommitSha && !W.WipSelected ? "selected" : null) @(c.IsMerge ? "merge" : null)"
+                                 style="--gf-lane:@Avatars.LaneColor(item.Row.NodeColorIndex)"
+                                 @oncontextmenu="@(e => menu.OpenAsync(e))" @onclick="@(() => Select(item.Index))" @ondblclick="@(() => CheckoutAt(labels))">
+                                <span class="gf-col-ref"><RefPills Labels="labels" LaneColor="@Avatars.LaneColor(item.Row.NodeColorIndex)" /></span>
+                                <span class="gf-col-graph">
+                                    @if (!Filtered)
+                                    {
+                                        <GraphCell Row="item.Row" IsHead="@(c.Sha == W.Snapshot?.HeadSha)" HasRefs="@(labels is { Count: > 0 })" WipAbove="@(item.Index == WipIndex + 1 && WipIndex >= 0)" />
+                                    }
+                                </span>
+                                <span class="gf-col-msg gf-ellipsis" title="@c.Subject">@c.Subject</span>
+                                @if (W.Settings.ShowAuthorColumn) { <span class="gf-dim gf-ellipsis" title="@c.AuthorEmail">@c.AuthorName</span> }
+                                @if (W.Settings.ShowDateColumn) { <span class="gf-dim gf-nowrap" title="@c.AuthorDate.LocalDateTime.ToString("F", CultureInfo.CurrentCulture)">@Avatars.When(c.AuthorDate)</span> }
+                                @if (W.Settings.ShowShaColumn) { <span class="gf-mono gf-dim">@c.ShortSha[..7]</span> }
+                            </div>
+                        </ActivatorContent>
+                        <ChildContent>
+                            <CommitMenu Commit="c" />
+                        </ChildContent>
+                    </MudMenu>
+                }
+            </ItemContent>
+            <Placeholder Context="ph">
+                <div class="gf-grow-row gf-placeholder"></div>
+            </Placeholder>
+        </Virtualize>
+        @if (W.Rows.Count == 0 && !W.HistoryLoading && !W.HasWip)
+        {
+            <div class="gf-empty">No commits yet.</div>
+        }
+    </div>
+</div>
+
+@code {
+    private readonly record struct GraphItem(int Index, GraphRow? Row, bool IsWip);
+
+    private Virtualize<GraphItem>? _virtualize;
+    private ElementReference _scroller;
+    private ElementReference _search;
+    private string _query = string.Empty;
+    private int[]? _filtered;
+    private bool _filterBusy;
+    private int _maxLanes = 1;
+    private int _lanesScanned;
+    private int _headRow = -1;
+    private string? _headRowSha;
+    private CancellationTokenSource? _filterCts;
+    private readonly Dictionary<string, HashSet<string>> _pathCache = new(StringComparer.Ordinal);
+
+    private bool Filtered => _filtered is not null;
+    private int WipIndex => !Filtered && W.HasWip ? Math.Max(_headRow, 0) : -1;
+    private int VisibleCount => _filtered?.Length ?? W.Rows.Count + (WipIndex >= 0 ? 1 : 0);
+    private GraphRow? HeadRow => _headRow >= 0 && _headRow < W.Rows.Count ? W.Rows[_headRow] : null;
+    private string WipLane => HeadRow is { } h ? Avatars.LaneColor(h.NodeColorIndex) : "var(--gf-dim)";
+    private int GraphWidth => Filtered ? 36 : (int)Math.Clamp(GraphCell.Geometry.Width(_maxLanes) + 10, 40, 420);
+
+    private string Columns =>
+        $"var(--gf-col-ref, 190px) {GraphWidth}px minmax(220px, 1fr)" +
+        (W.Settings.ShowAuthorColumn ? " 150px" : string.Empty) +
+        (W.Settings.ShowDateColumn ? " 110px" : string.Empty) +
+        (W.Settings.ShowShaColumn ? " 70px" : string.Empty);
+
+    private string CountText => Filtered
+        ? $"{_filtered!.Length.ToString("N0", CultureInfo.CurrentCulture)} of {W.Rows.Count.ToString("N0", CultureInfo.CurrentCulture)}"
+        : $"{W.Rows.Count.ToString("N0", CultureInfo.CurrentCulture)} commits{(W.HistoryLoading ? "…" : string.Empty)}";
+
+    protected override void OnInitialized()
+    {
+        W.HistoryChanged += OnHistoryChanged;
+        W.Changed += OnChanged;
+        W.RevealRequested += OnReveal;
+        Shortcuts.Command += OnCommand;
+        ScanLanes();
+        FindHeadRow();
+    }
+
+    private IReadOnlyList<RefLabel>? Labels(string sha) => W.RefIndex.TryGetValue(sha, out var l) ? l : null;
+
+    private static string ShortRef(string canonical) =>
+        canonical.StartsWith("refs/heads/", StringComparison.Ordinal) ? canonical[11..]
+        : canonical.StartsWith("refs/remotes/", StringComparison.Ordinal) ? canonical[13..] : canonical;
+
+    private GraphItem? ItemAt(int d)
+    {
+        if (d < 0 || d >= VisibleCount) return null;
+        if (_filtered is { } f) return f[d] < W.Rows.Count ? new GraphItem(d, W.Rows[f[d]], false) : null;
+        var wip = WipIndex;
+        if (wip >= 0 && d == wip) return new GraphItem(d, null, true);
+        var r = wip >= 0 && d > wip ? d - 1 : d;
+        return r < W.Rows.Count ? new GraphItem(d, W.Rows[r], false) : null;
+    }
+
+    private ValueTask<ItemsProviderResult<GraphItem>> ProvideAsync(ItemsProviderRequest request)
+    {
+        var total = VisibleCount;
+        var end = Math.Min(total, request.StartIndex + request.Count);
+        var items = new List<GraphItem>(Math.Max(0, end - request.StartIndex));
+        for (var i = request.StartIndex; i < end; i++)
+        {
+            if (ItemAt(i) is { } item) items.Add(item);
+        }
+
+        return ValueTask.FromResult(new ItemsProviderResult<GraphItem>(items, total));
+    }
+
+    private int SelectedIndex()
+    {
+        if (W.WipSelected) return WipIndex;
+        var sha = W.SelectedCommitSha;
+        if (sha is null) return -1;
+        for (var i = 0; i < VisibleCount; i++)
+        {
+            if (ItemAt(i) is { IsWip: false } item && item.Row!.Commit.Sha == sha) return i;
+        }
+
+        return -1;
+    }
+
+    private async Task Select(int index, bool scroll = false)
+    {
+        if (ItemAt(index) is not { } item) return;
+        W.PanelFocused = false;
+        if (item.IsWip) W.SelectWip();
+        else W.SelectCommit(item.Row!.Commit.Sha);
+        if (scroll) await JS.InvokeVoidAsync("gitforge.scrollRowIntoView", _scroller, index, 32);
+    }
+
+    private Task SelectWip(int index) => Select(index);
+
+    private async Task CheckoutAt(IReadOnlyList<RefLabel>? labels)
+    {
+        var local = labels?.FirstOrDefault(l => l.Kind == RefKind.LocalBranch && !l.IsCurrent);
+        if (local is not null) await W.CheckoutAsync(local.Name);
+    }
+
+    private void ScanLanes()
+    {
+        var rows = W.Rows;
+        if (_lanesScanned > rows.Count) _lanesScanned = 0;
+        for (var i = _lanesScanned; i < rows.Count; i++) _maxLanes = Math.Max(_maxLanes, rows[i].LaneCount);
+        _lanesScanned = rows.Count;
+    }
+
+    private void FindHeadRow()
+    {
+        var head = W.Snapshot?.HeadSha;
+        if (head == _headRowSha && _headRow >= 0 && _headRow < W.Rows.Count && W.Rows[_headRow].Commit.Sha == head) return;
+        _headRowSha = head;
+        _headRow = -1;
+        if (head is null) return;
+        var rows = W.Rows;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (rows[i].Commit.Sha == head)
+            {
+                _headRow = i;
+                return;
+            }
+        }
+    }
+
+    private void OnHistoryChanged() => _ = InvokeAsync(async () =>
+    {
+        if (_lanesScanned > W.Rows.Count) _maxLanes = 1;
+        ScanLanes();
+        _headRow = -1;
+        FindHeadRow();
+        if (Filtered) await ApplyFilterAsync(_query);
+        if (_virtualize is not null) await _virtualize.RefreshDataAsync();
+        StateHasChanged();
+    });
+
+    private bool _lastHasWip;
+    private int _lastHeadRow = -2;
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        FindHeadRow();
+        // Only re-query rows when the WIP row appears/disappears or moves; selection changes just re-render.
+        if ((_lastHasWip != W.HasWip || _lastHeadRow != _headRow) && _virtualize is not null)
+        {
+            _lastHasWip = W.HasWip;
+            _lastHeadRow = _headRow;
+            await _virtualize.RefreshDataAsync();
+        }
+
+        StateHasChanged();
+    });
+
+    private void OnReveal(string sha) => _ = InvokeAsync(async () =>
+    {
+        var i = SelectedIndex();
+        if (i >= 0) await JS.InvokeVoidAsync("gitforge.scrollRowIntoView", _scroller, i, 32);
+    });
+
+    private async Task Toggle(string column)
+    {
+        await SettingsStore.UpdateAsync(s => column switch
+        {
+            "author" => s with { ShowAuthorColumn = !s.ShowAuthorColumn },
+            "date" => s with { ShowDateColumn = !s.ShowDateColumn },
+            _ => s with { ShowShaColumn = !s.ShowShaColumn },
+        });
+        StateHasChanged();
+    }
+
+    private async Task OnQueryInput(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? string.Empty;
+        _filterCts?.Cancel();
+        var cts = _filterCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(150, cts.Token); // debounce keystrokes
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+
+        await ApplyFilterAsync(_query);
+        if (_virtualize is not null) await _virtualize.RefreshDataAsync();
+        if (Filtered && VisibleCount > 0) await Select(0, scroll: true);
+        StateHasChanged();
+    }
+
+    /// <summary>In-memory filter over loaded rows; <c>path:</c> asks git for the matching commit set once and caches it.</summary>
+    private async Task ApplyFilterAsync(string query)
+    {
+        var f = HistoryFilter.Parse(query);
+        if (f.IsEmpty)
+        {
+            _filtered = null;
+            return;
+        }
+
+        HashSet<string>? pathShas = null;
+        if (f.Path is { } path && W.Repo is { } repo && !_pathCache.TryGetValue(path, out pathShas))
+        {
+            _filterBusy = true;
+            StateHasChanged();
+            pathShas = new HashSet<string>(StringComparer.Ordinal);
+            try
+            {
+                await foreach (var c in repo.Read.GetHistoryAsync(new HistoryQuery { PathFilter = path })) pathShas.Add(c.Sha);
+                _pathCache[path] = pathShas;
+            }
+            catch (Exception ex)
+            {
+                W.Error("Path filter", ex);
+            }
+            finally
+            {
+                _filterBusy = false;
+            }
+        }
+
+        var rows = W.Rows;
+        _filtered = await Task.Run(() =>
+        {
+            var result = new List<int>();
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var c = rows[i].Commit;
+                if (pathShas is not null && !pathShas.Contains(c.Sha)) continue;
+                if (f.Matches(c)) result.Add(i);
+            }
+
+            return result.ToArray();
+        });
+    }
+
+    private async Task OnCommand(string command)
+    {
+        if (W.Center != CenterView.Graph) return;
+        if (command == "search.focus")
+        {
+            await _search.FocusAsync();
+            return;
+        }
+
+        if (command == "escape" && _query.Length > 0)
+        {
+            _query = string.Empty;
+            _filtered = null;
+            if (_virtualize is not null) await _virtualize.RefreshDataAsync();
+            StateHasChanged();
+            return;
+        }
+
+        if (W.PanelFocused) return;
+        var current = SelectedIndex();
+        switch (command)
+        {
+            case "nav.down": await Select(Math.Min(current + 1, VisibleCount - 1), scroll: true); break;
+            case "nav.up": await Select(Math.Max(current - 1, 0), scroll: true); break;
+            case "nav.top": await Select(0, scroll: true); break;
+            case "nav.bottom": await Select(VisibleCount - 1, scroll: true); break;
+            case "nav.open":
+                W.PanelFocused = true;
+                W.Notify();
+                break;
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        W.HistoryChanged -= OnHistoryChanged;
+        W.Changed -= OnChanged;
+        W.RevealRequested -= OnReveal;
+        Shortcuts.Command -= OnCommand;
+        _filterCts?.Cancel();
+        _filterCts?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

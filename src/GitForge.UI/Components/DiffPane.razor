@@ -1,0 +1,160 @@
+@using GitForge.Git.Undo
+@implements IDisposable
+@inject RepoWorkspace W
+@inject IDialogService Dialogs
+
+<div class="gf-diffpane">
+    <div class="gf-diffpane-head">
+        <button class="gf-back" @onclick="W.ShowGraph" title="Back to graph (Esc)">
+            <MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Size="Size.Small" /> Graph
+        </button>
+        @if (_file is { } f)
+        {
+            <StatusGlyph Kind="f.Kind" />
+            <span class="gf-mono gf-ellipsis gf-grow" title="@f.Path">@f.Path</span>
+            <span class="gf-chip">@(f.Area == StagingArea.Staged ? "staged" : "unstaged")</span>
+            @if (f.Area == StagingArea.Unstaged && f.Kind != FileChangeKind.Conflicted)
+            {
+                <button class="gf-btn gf-btn-stage" @onclick="StageFile">Stage file</button>
+                <button class="gf-btn gf-btn-danger" @onclick="DiscardFile">Discard file</button>
+            }
+            else if (f.Area == StagingArea.Staged)
+            {
+                <button class="gf-btn gf-btn-ghost" @onclick="UnstageFile">Unstage file</button>
+            }
+        }
+        else if (W.OpenDiff?.CommitFile is { } cf)
+        {
+            <StatusGlyph Kind="cf.Kind" />
+            <span class="gf-mono gf-ellipsis gf-grow" title="@cf.Path">@(cf.OldPath is null ? cf.Path : $"{cf.OldPath} → {cf.Path}")</span>
+            <span class="gf-chip">@W.OpenDiff.CommitSha?[..7]</span>
+        }
+        else
+        {
+            <span class="gf-dim gf-grow">@W.OpenDiff?.Path</span>
+        }
+    </div>
+
+    @if (_file?.Kind == FileChangeKind.Conflicted)
+    {
+        <ConflictActions Path="@_file.Path" />
+    }
+    else
+    {
+        <DiffViewer Diff="_diff" Loading="_loading" Area="_file?.Area" HasFocus="@(!W.PanelFocused)"
+                    Placeholder="@(_gone ? "This file no longer has changes." : "No changes to show")" OnApply="ApplyLines" OnReload="LoadAsync" />
+    }
+</div>
+
+@code {
+    private DiffTarget? _target;
+    private FileStatusEntry? _file;
+    private FileDiff? _diff;
+    private bool _loading;
+    private bool _gone;
+    private int _version;
+
+    protected override async Task OnInitializedAsync()
+    {
+        W.Changed += OnChanged;
+        await SyncAsync(force: true);
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await SyncAsync(force: false);
+        StateHasChanged();
+    });
+
+    /// <summary>Follows the target across refreshes: a working file that was staged moves to the staged diff.</summary>
+    private async Task SyncAsync(bool force)
+    {
+        var target = W.OpenDiff;
+        if (target is null) return;
+
+        if (target.Working is { } wanted)
+        {
+            var all = W.Status.Conflicted.Concat(W.Status.Unstaged).Concat(W.Status.Staged).ToList();
+            var match = all.FirstOrDefault(f => f.Path == wanted.Path && f.Area == wanted.Area) ?? all.FirstOrDefault(f => f.Path == wanted.Path);
+            var changed = force || !ReferenceEquals(target, _target) || match != _file;
+            _target = target;
+            _gone = match is null;
+            _file = match;
+            if (changed || W.Status != _lastStatus) await LoadAsync();
+            _lastStatus = W.Status;
+            return;
+        }
+
+        _file = null;
+        _gone = false;
+        if (force || !ReferenceEquals(target, _target))
+        {
+            _target = target;
+            await LoadAsync();
+        }
+    }
+
+    private WorkingCopyStatus? _lastStatus;
+
+    private async Task LoadAsync()
+    {
+        var version = ++_version;
+        var repo = W.Repo;
+        var target = _target;
+        if (repo is null || target is null) return;
+        if (target.Working is not null && _file is null)
+        {
+            _diff = null;
+            return;
+        }
+
+        _loading = _diff is null || _diff.Path != target.Path;
+        StateHasChanged();
+        try
+        {
+            var options = new DiffOptions(W.Settings.IgnoreWhitespace);
+            var file = _file;
+            var diff = file is not null
+                ? await Task.Run(() => repo.Read.GetWorkingDiffAsync(file, options))
+                : await Task.Run(() => repo.Read.GetCommitDiffAsync(target.CommitSha!, target.CommitFile!, options));
+            if (version == _version) _diff = diff;
+        }
+        catch (Exception ex)
+        {
+            if (version == _version) _diff = null;
+            W.Error("Load diff", ex);
+        }
+        finally
+        {
+            if (version == _version) _loading = false;
+        }
+    }
+
+    private Task StageFile() => _file is { } f ? W.RunAsync("Staging", (r, _) => r.Index.StageAsync([f.Path])) : Task.CompletedTask;
+
+    private Task UnstageFile() => _file is { } f
+        ? W.RunAsync("Unstaging", (r, _) => r.Index.UnstageAsync(f.OldPath is null ? [f.Path] : [f.Path, f.OldPath]))
+        : Task.CompletedTask;
+
+    private async Task DiscardFile()
+    {
+        if (_file is not { } f) return;
+        if (await Dialogs.ShowMessageBoxAsync("Discard changes", $"Discard all changes to '{f.Path}'? Ctrl+Z restores them until your next action.", yesText: "Discard", cancelText: "Cancel") != true) return;
+        await W.RunUndoableAsync("Discarding", r => UndoableOperations.DiscardAsync(r, () => r.Index.DiscardAsync([f]), [f.Path]));
+    }
+
+    private async Task ApplyLines((IReadOnlySet<LineRef> Lines, PatchAction Action) e)
+    {
+        if (_diff is not { } diff || _file is not { } f) return;
+        if (e.Action == PatchAction.Discard)
+        {
+            if (await Dialogs.ShowMessageBoxAsync("Discard lines", $"Discard {e.Lines.Count} changed line(s)? Ctrl+Z restores them until your next action.", yesText: "Discard", cancelText: "Cancel") != true) return;
+            await W.RunUndoableAsync("Discarding lines", r => UndoableOperations.DiscardAsync(r, () => r.Index.ApplySelectionAsync(diff, e.Lines, e.Action), [f.Path]));
+            return;
+        }
+
+        await W.RunAsync(e.Action == PatchAction.Stage ? "Staging lines" : "Unstaging lines", (r, _) => r.Index.ApplySelectionAsync(diff, e.Lines, e.Action));
+    }
+
+    public void Dispose() => W.Changed -= OnChanged;
+}

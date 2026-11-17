@@ -13,9 +13,13 @@ public sealed class ShortcutService : IAsyncDisposable
 {
     public static readonly IReadOnlyList<(string Keys, string Command, string Description)> Map =
     [
-        ("Ctrl+1", "view.status", "File status (staging)"),
-        ("Ctrl+2", "view.history", "History graph"),
+        ("Ctrl+P", "palette.open", "Command palette (actions, branches, repositories)"),
+        ("Ctrl+Z", "edit.undo", "Undo last action (commit, checkout, branch, reset, discard)"),
+        ("Ctrl+Y / Ctrl+Shift+Z", "edit.redo", "Redo"),
+        ("Ctrl+1", "view.status", "Select WIP (staging)"),
+        ("Ctrl+2", "view.history", "Back to the commit graph"),
         ("Ctrl+3", "view.reflog", "Reflog recovery"),
+        ("Esc", "escape", "Close diff / reflog, return to graph"),
         ("Ctrl+O", "repo.open", "Open repository"),
         ("Ctrl+Shift+O", "repo.clone", "Clone repository"),
         ("F5", "repo.refresh", "Refresh"),
@@ -32,7 +36,7 @@ public sealed class ShortcutService : IAsyncDisposable
         ("k / ↑", "nav.up", "Previous item"),
         ("g g", "nav.top", "First item"),
         ("Shift+G", "nav.bottom", "Last item"),
-        ("h / l", "pane.prev / pane.next", "Switch focus between file lists and diff"),
+        ("h / l", "pane.prev / pane.next", "Move focus: graph ↔ commit panel"),
         ("s", "item.stage", "Stage file / selected lines"),
         ("u", "item.unstage", "Unstage file / selected lines"),
         ("d", "item.discard", "Discard (asks to confirm)"),
@@ -98,6 +102,10 @@ public sealed class ShortcutService : IAsyncDisposable
                 ("`", _) => "console.toggle",
                 ("f", false) => "search.focus",
                 ("enter", _) => "commit.submit",
+                ("p", false) => "palette.open",
+                ("z", false) when !k.InInput => "edit.undo",
+                ("z", true) when !k.InInput => "edit.redo",
+                ("y", false) when !k.InInput => "edit.redo",
                 _ => null,
             };
         }

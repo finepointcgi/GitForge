@@ -155,10 +155,17 @@ internal sealed class RepositoryReader(RepoContext ctx) : IRepositoryReader
         if (query.Since is { } since) args.Add($"--since={since.ToUnixTimeSeconds()}");
         if (query.Until is { } until) args.Add($"--until={until.ToUnixTimeSeconds()}");
 
+        string? stdin = null;
         if (query.StartRef is { Length: > 0 } start)
         {
             args.Add("--end-of-options");
             args.Add(start);
+        }
+        else if (query.Refs is { Count: > 0 } refs)
+        {
+            // Read tips from stdin: no command-line length limit, and names can never be parsed as options.
+            args.Add("--stdin");
+            stdin = string.Join('\n', refs.Where(r => !r.StartsWith('-'))) + "\n";
         }
         else if (query.AllRefs)
         {
@@ -174,7 +181,7 @@ internal sealed class RepositoryReader(RepoContext ctx) : IRepositoryReader
         if (!string.IsNullOrWhiteSpace(query.PathFilter)) args.Add(query.PathFilter);
 
         var unborn = await ctx.Lib.RunAsync(r => r.Info.IsHeadUnborn, cancellationToken).ConfigureAwait(false);
-        if (unborn && query.StartRef is null)
+        if (unborn && query.StartRef is null && stdin is null)
         {
             if (!query.AllRefs) yield break;
             args.Remove("HEAD");
@@ -182,7 +189,7 @@ internal sealed class RepositoryReader(RepoContext ctx) : IRepositoryReader
             if (!hasRefs) yield break;
         }
 
-        var cmd = new GitCommand(ctx.WorkDir, args);
+        var cmd = new GitCommand(ctx.WorkDir, args) { StandardInput = stdin };
         await foreach (var raw in ctx.Cli.StreamAsync(cmd, RecordSep, cancellationToken).ConfigureAwait(false))
         {
             var record = raw.Trim('\n', '\r');

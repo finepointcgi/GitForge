@@ -2,21 +2,37 @@ using GitForge.Core.Abstractions;
 using GitForge.Core.Graph;
 using GitForge.Core.Models;
 using GitForge.Git;
+using GitForge.Git.Undo;
 using Microsoft.Extensions.Logging;
 using MudBlazor;
 
 namespace GitForge.UI.Services;
 
-public enum WorkspaceView
+/// <summary>What the center pane shows. The graph is home; diffs and the reflog open over it (Esc returns).</summary>
+public enum CenterView
 {
-    FileStatus,
-    History,
+    Graph,
+    Diff,
     Reflog,
 }
 
+public enum PullMode
+{
+    /// <summary>Fast-forward if possible, otherwise merge.</summary>
+    MergeIfNeeded,
+    FastForwardOnly,
+    Rebase,
+}
+
+/// <summary>A file opened in the center diff pane: either a working-copy file or a file in a commit.</summary>
+public sealed record DiffTarget(FileStatusEntry? Working, string? CommitSha, FileChange? CommitFile)
+{
+    public string Path => Working?.Path ?? CommitFile?.Path ?? string.Empty;
+}
+
 /// <summary>
-/// Per-window state container for the active repository. Components subscribe to <see cref="Changed"/>
-/// (coarse UI refresh) and <see cref="HistoryChanged"/> (graph rows appended). All git work runs off the UI thread.
+/// Per-window state for the active repository. Components subscribe to <see cref="Changed"/> (coarse refresh)
+/// and <see cref="HistoryChanged"/> (graph rows appended). All git work runs off the UI thread.
 /// </summary>
 public sealed partial class RepoWorkspace : IAsyncDisposable
 {
@@ -44,6 +60,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         _snackbar = snackbar;
         _log = log;
         _engine.SelfHostedResolver = _accounts.ResolveSelfHosted;
+        Undo.Changed += (_, _) => Notify();
     }
 
     public IGitRepository? Repo { get; private set; }
@@ -52,20 +69,36 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
     public WorkingCopyStatus Status { get; private set; } = WorkingCopyStatus.Empty;
     public AppendOnlyList<GraphRow> Rows { get; private set; } = new();
     public bool HistoryLoading { get; private set; }
-    public WorkspaceView View { get; private set; } = WorkspaceView.FileStatus;
-    public string? SelectedCommitSha { get; set; }
     public bool IsBusy => BusyText is not null;
     public string? BusyText { get; private set; }
     public string? ProgressText { get; private set; }
     public bool ConsoleOpen { get; set; }
     public List<string> ConsoleLines { get; } = [];
     public AppSettings Settings => _settings.Current;
+    public UndoManager Undo { get; } = new();
 
-    /// <summary>Coarse change notification (snapshot, status, busy state, view).</summary>
+    // Selection model: either the WIP node or one commit is selected; the commit panel follows it.
+    public bool WipSelected { get; private set; }
+    public string? SelectedCommitSha { get; private set; }
+    public CenterView Center { get; private set; } = CenterView.Graph;
+
+    /// <summary>Keyboard focus: graph (false) or commit panel (true). h/l switch; vim keys act on the focused side.</summary>
+    public bool PanelFocused { get; set; }
+    public DiffTarget? OpenDiff { get; private set; }
+
+    // Hide / solo branches in the graph (canonical ref names).
+    public HashSet<string> HiddenRefs { get; } = new(StringComparer.Ordinal);
+    public string? SoloRef { get; private set; }
+    public bool IsFilteringRefs => SoloRef is not null || HiddenRefs.Count > 0;
+
+    /// <summary>Coarse change notification (snapshot, status, busy state, selection).</summary>
     public event Action? Changed;
 
     /// <summary>History rows were appended or replaced.</summary>
     public event Action? HistoryChanged;
+
+    /// <summary>Ask the graph to scroll a commit into view.</summary>
+    public event Action<string>? RevealRequested;
 
     public string? CurrentBranch => Snapshot?.HeadBranch;
 
@@ -76,11 +109,46 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         ?? Snapshot?.Remotes.FirstOrDefault(r => r.Name == "origin")
         ?? (Snapshot is { Remotes.Count: > 0 } s ? s.Remotes[0] : null);
 
-    public void SetView(WorkspaceView view)
+    public bool HasWip => Repo is not null && !Status.IsClean;
+
+    // ---------- Selection & center pane ----------
+
+    public void SelectWip()
     {
-        View = view;
+        WipSelected = true;
+        SelectedCommitSha = null;
         Notify();
     }
+
+    public void SelectCommit(string sha, bool reveal = false)
+    {
+        WipSelected = false;
+        SelectedCommitSha = sha;
+        Notify();
+        if (reveal) RevealRequested?.Invoke(sha);
+    }
+
+    public void ShowGraph()
+    {
+        Center = CenterView.Graph;
+        OpenDiff = null;
+        Notify();
+    }
+
+    public void ShowReflog()
+    {
+        Center = CenterView.Reflog;
+        Notify();
+    }
+
+    public void ShowDiff(DiffTarget target)
+    {
+        OpenDiff = target;
+        Center = CenterView.Diff;
+        Notify();
+    }
+
+    // ---------- Lifecycle ----------
 
     public async Task InitializeAsync()
     {
@@ -105,9 +173,8 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
             await _settings.UpdateAsync(s => s with { RecentRepositories = [root, .. s.RecentRepositories.Where(r => !string.Equals(r, root, StringComparison.OrdinalIgnoreCase)).Take(19)] });
 
             await RefreshAsync(RepositoryChangeKind.All);
-            View = Status.IsClean ? WorkspaceView.History : WorkspaceView.FileStatus;
-            Notify();
-
+            if (HasWip) SelectWip();
+            else if (Snapshot?.HeadSha is { } head) SelectCommit(head);
             StartAutoFetch();
         }
         catch (Exception ex)
@@ -131,6 +198,12 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         Status = WorkingCopyStatus.Empty;
         Rows = new AppendOnlyList<GraphRow>();
         SelectedCommitSha = null;
+        WipSelected = false;
+        Center = CenterView.Graph;
+        OpenDiff = null;
+        HiddenRefs.Clear();
+        SoloRef = null;
+        Undo.Clear();
         Notify();
         HistoryChanged?.Invoke();
     }
@@ -162,6 +235,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
                 }
 
                 Status = await repo.Read.GetStatusAsync();
+                if (WipSelected && Status.IsClean && Snapshot?.HeadSha is { } head) SelectCommit(head);
                 Notify();
                 if (refs) _ = LoadHistoryAsync();
             }
@@ -180,7 +254,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         if (again) await RefreshAsync(RepositoryChangeKind.None);
     }
 
-    /// <summary>Streams the full history through the incremental graph layout, publishing rows in batches.</summary>
+    /// <summary>Streams history through the incremental graph layout, publishing rows in batches.</summary>
     public async Task LoadHistoryAsync()
     {
         var repo = Repo;
@@ -188,7 +262,8 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         _historyCts?.Cancel();
         var cts = _historyCts = new CancellationTokenSource();
         var rows = new AppendOnlyList<GraphRow>();
-        var builder = new CommitGraphBuilder();
+        var builder = new CommitGraphBuilder(GitForgeTheme.LaneColors.Length);
+        var query = BuildHistoryQuery();
         HistoryLoading = true;
 
         try
@@ -196,7 +271,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
             await Task.Run(async () =>
             {
                 var nextPublish = FirstHistoryBatch;
-                await foreach (var commit in repo.Read.GetHistoryAsync(new HistoryQuery(), cts.Token))
+                await foreach (var commit in repo.Read.GetHistoryAsync(query, cts.Token))
                 {
                     rows.Add(builder.Add(commit));
                     if (rows.Count >= nextPublish)
@@ -222,12 +297,53 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         Notify();
     }
 
+    private HistoryQuery BuildHistoryQuery()
+    {
+        if (SoloRef is { } solo) return new HistoryQuery { Refs = [solo] };
+        if (HiddenRefs.Count == 0 || Snapshot is not { } s) return new HistoryQuery();
+
+        // Tags are left out while hiding so they cannot pull hidden branches back into the graph.
+        var refs = s.LocalBranches.Concat(s.RemoteBranches)
+            .Select(b => b.CanonicalName)
+            .Where(r => !HiddenRefs.Contains(r))
+            .ToList();
+        var currentHidden = CurrentBranchHead is { } cur && HiddenRefs.Contains(cur.CanonicalName);
+        if (!currentHidden && s.HeadSha is not null) refs.Add("HEAD");
+        return refs.Count == 0 ? new HistoryQuery { Refs = ["HEAD"] } : new HistoryQuery { Refs = refs };
+    }
+
+    public Task ToggleHiddenAsync(string canonicalRef)
+    {
+        if (!HiddenRefs.Remove(canonicalRef)) HiddenRefs.Add(canonicalRef);
+        SoloRef = null;
+        Notify();
+        return LoadHistoryAsync();
+    }
+
+    public Task SoloAsync(string? canonicalRef)
+    {
+        SoloRef = SoloRef == canonicalRef ? null : canonicalRef;
+        HiddenRefs.Clear();
+        Notify();
+        return LoadHistoryAsync();
+    }
+
+    public Task ShowAllRefsAsync()
+    {
+        HiddenRefs.Clear();
+        SoloRef = null;
+        Notify();
+        return LoadHistoryAsync();
+    }
+
     private void Publish(AppendOnlyList<GraphRow> rows, CancellationTokenSource cts)
     {
         if (cts.IsCancellationRequested) return;
         Rows = rows;
         HistoryChanged?.Invoke();
     }
+
+    // ---------- Operations ----------
 
     /// <summary>Runs a git operation with busy state, progress text, and user-facing error reporting.</summary>
     public async Task<bool> RunAsync(string label, Func<IGitRepository, IProgress<string>, Task> operation, string? success = null)
@@ -263,9 +379,23 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         }
     }
 
+    /// <summary>Runs an operation that records an undo entry (Ctrl+Z reverses it).</summary>
+    public Task<bool> RunUndoableAsync(string label, Func<IGitRepository, Task<UndoEntry?>> operation, string? success = null) =>
+        RunAsync(label, async (r, _) => Undo.Record(await operation(r)), success);
+
+    public Task UndoAsync() => !Undo.CanUndo ? Task.CompletedTask
+        : RunAsync($"Undoing {Undo.UndoDescription}", async (r, _) => Info($"Undid {await Undo.UndoAsync(r)}"));
+
+    public Task RedoAsync() => !Undo.CanRedo ? Task.CompletedTask
+        : RunAsync($"Redoing {Undo.RedoDescription}", async (r, _) => Info($"Redid {await Undo.RedoAsync(r)}"));
+
+    public Task CheckoutAsync(string target) =>
+        RunUndoableAsync($"Checking out {target}", r => UndoableOperations.CheckoutAsync(r, target));
+
     public Task FetchAsync() => RunAsync("Fetching", (r, p) => r.Remotes.FetchAsync(new FetchRequest(), p), "Fetch complete");
 
-    public Task PullAsync(bool rebase = false) => RunAsync("Pulling", (r, p) => r.Remotes.PullAsync(new PullChangesRequest(Rebase: rebase), p), "Pull complete");
+    public Task PullAsync(PullMode mode = PullMode.MergeIfNeeded) => RunAsync("Pulling", (r, p) => r.Remotes.PullAsync(
+        new PullChangesRequest(Rebase: mode == PullMode.Rebase, FastForwardOnly: mode == PullMode.FastForwardOnly), p), "Pull complete");
 
     public Task PushAsync(bool force = false)
     {
@@ -280,6 +410,17 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         var remoteBranch = head.UpstreamName is { } up && up.StartsWith(remote.Name + "/", StringComparison.Ordinal) ? up[(remote.Name.Length + 1)..] : head.Name;
         var request = new PushRequest(remote.Name, head.Name, remoteBranch, SetUpstream: !head.HasUpstream, ForceWithLease: force);
         return RunAsync("Pushing", (r, p) => r.Remotes.PushAsync(request, p), $"Pushed {head.Name} → {remote.Name}/{remoteBranch}");
+    }
+
+    public Task PopStashAsync()
+    {
+        if (Snapshot?.Stashes.Count is null or 0)
+        {
+            Info("There are no stashes to pop.", Severity.Warning);
+            return Task.CompletedTask;
+        }
+
+        return RunAsync("Popping stash", (r, _) => r.Stashes.ApplyAsync(0, pop: true, restoreIndex: false), "Stash popped");
     }
 
     public async Task<GitResult?> RunConsoleAsync(IReadOnlyList<string> args)

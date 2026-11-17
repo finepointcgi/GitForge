@@ -3,6 +3,7 @@
 
 <div class="gf-pane gf-reflog">
     <div class="gf-pane-toolbar">
+        <button class="gf-back" @onclick="W.ShowGraph" title="Back to graph (Esc)"><MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Size="Size.Small" /> Graph</button>
         <span class="gf-group-title">Reflog — HEAD</span>
         <span class="gf-dim gf-small">Every position HEAD has pointed to. Use it to recover lost commits after a reset, rebase, or deleted branch.</span>
         <span class="gf-spacer"></span>
@@ -42,7 +43,7 @@
                         <td class="gf-dim gf-nowrap">@e.When.LocalDateTime.ToString("g", CultureInfo.CurrentCulture)</td>
                         <td class="gf-nowrap">
                             <button class="gf-link-button" @onclick="@(() => Recover(e.ToSha))">Branch…</button>
-                            <button class="gf-link-button" @onclick="@(() => W.RunAsync("Checking out", (r, _) => r.Branches.CheckoutAsync(e.ToSha)))">Checkout</button>
+                            <button class="gf-link-button" @onclick="@(() => W.CheckoutAsync(e.ToSha))">Checkout</button>
                         </td>
                     </tr>
                 }

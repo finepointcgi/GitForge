@@ -17,7 +17,7 @@ flowchart LR
         Shell["GitForgeApp shell<br/>toolbar · sidebar · 3 panes"]
         WS["RepoWorkspace<br/>per-window state"]
         KB["ShortcutService<br/>+ gitforge.js"]
-        Views["HistoryView · StagingView · DiffViewer<br/>ReflogView · dialogs"]
+        Views["LeftPanel · GraphView · CommitPanel<br/>DiffPane · ReflogView · CommandPalette"]
     end
 
     subgraph Core["GitForge.Core (no I/O)"]
@@ -165,6 +165,14 @@ Forward patches (stage) must match the old side: unselected deletions become con
 
 `IGitRepository` exposes feature areas: `Read` (snapshot, status, history, diffs, reflog, dangling commits), `Index` (stage, unstage, discard, partial patches, commit, conflict resolution), `Branches` (checkout, create, rename, delete, upstream, tags), `Remotes` (fetch, pull, push, prune), `Stashes`, `History` (merge, rebase, cherry-pick, revert, reset, interactive rebase, continue/abort/skip), and `Submodules`. Hosting uses `IHostingProvider` and `IAccountService`; platform services are `ISecretStore` and `ISettingsStore`.
 
+### UI model
+
+The window is three resizable panes. The left panel lists refs (local branches grouped into folders, remotes, pull requests, tags, stashes, submodules). The center shows the commit graph by default; a diff or the reflog opens over it and Esc returns. The right commit panel follows the selection: the **WIP row** (uncommitted changes, drawn as a dashed node directly above HEAD) shows unstaged/staged files and the commit message (summary + description); a commit shows its details and changed files. `RepoWorkspace` owns this selection state (`WipSelected`, `SelectedCommitSha`, `Center`, `OpenDiff`) plus hide/solo ref filters, which re-stream history with an explicit tip list passed to `git log --stdin`.
+
+### Undo
+
+`GitForge.Git.Undo.UndoManager` keeps one undo slot and one redo slot. `UndoableOperations` wraps commit, checkout, branch create/delete, reset, and discard; each records its inverse plus guards (for example, HEAD must still be where the action left it), so undo refuses rather than overwrite newer work. Discard snapshots the affected files' bytes in memory first (up to 64 MB), which also makes deleted untracked files recoverable.
+
 ## 4. Security posture
 
 - **No telemetry, no cloud dependency.** Network traffic is limited to the user's Git remotes and the hosting APIs they configure. Works fully offline or air-gapped.
@@ -178,7 +186,7 @@ Forward patches (stage) must match the old side: unselected deletions become con
 
 ## 5. Requirements and tested baseline
 
-- Windows 10/11 x64 with the WebView2 runtime (built into Windows 11).
+- Windows 10 version 1809 (build 17763) or later, or Windows 11, x64, with the WebView2 runtime (built into Windows 11). The desktop host targets `net10.0-windows10.0.17763.0` because the WebView2 SDK's WPF assembly references the Windows SDK projection (`Microsoft.Windows.SDK.NET`).
 - .NET 10 SDK to build; .NET 10 runtime to run.
 - Git for Windows 2.39 or later on `PATH` (tested with 2.52). GitForge warns in the status bar when Git is missing or too old.
 - Key packages: MudBlazor 9.14.0, LibGit2Sharp 0.32.0, Microsoft.AspNetCore.Components.WebView.Wpf 10.0.130, xunit.v3 4.0.3.

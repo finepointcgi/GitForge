@@ -89,7 +89,8 @@ public static class PlatformServiceCollectionExtensions
     public static IServiceCollection AddGitForgePlatform(this IServiceCollection services)
     {
         services.AddSingleton<ISecretStore>(_ => SecretStoreFactory.CreateDefault());
-        services.AddSingleton<ISettingsStore>(_ => new JsonSettingsStore());
+        // GITFORGE_SETTINGS selects an alternate settings file (portable installs, isolated test runs).
+        services.AddSingleton<ISettingsStore>(_ => new JsonSettingsStore(Environment.GetEnvironmentVariable("GITFORGE_SETTINGS") is { Length: > 0 } p ? p : null));
         return services;
     }
 }

@@ -1,0 +1,296 @@
+@using GitForge.Git.Undo
+@implements IDisposable
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+@inject IDialogService Dialogs
+@inject IJSRuntime JS
+
+<div class="gf-panel @(W.PanelFocused ? "focused" : null)" @onclick="@(() => W.PanelFocused = true)">
+    @if (W.WipSelected)
+    {
+        var total = W.Status.TotalCount;
+        <div class="gf-panel-head">
+            <MudIcon Icon="@Icons.Material.Outlined.EditNote" Size="Size.Small" />
+            <span><strong>@total</strong> file change@(total == 1 ? string.Empty : "s") on <span class="gf-branch-chip">@(W.CurrentBranch ?? "detached HEAD")</span></span>
+            <span class="gf-spacer"></span>
+            <MudTooltip Text="Discard all changes">
+                <MudIconButton Icon="@Icons.Material.Outlined.DeleteSweep" Size="Size.Small" Color="Color.Error" Disabled="@(W.Status.Unstaged.Count == 0)" OnClick="@(() => Discard(W.Status.Unstaged))" aria-label="Discard all changes" />
+            </MudTooltip>
+        </div>
+
+        <div class="gf-panel-lists">
+            @if (W.Status.Conflicted.Count > 0)
+            {
+                <FileList Title="Conflicts" Files="W.Status.Conflicted" Selected="SelectedFile" OnSelect="Open" />
+            }
+            <FileList Title="Unstaged files" Files="W.Status.Unstaged" Selected="SelectedFile" OnSelect="Open" OnStage="@(f => Stage([f]))" OnDiscard="@(f => Discard([f]))" EmptyText="No unstaged changes">
+                <HeaderActions>
+                    @if (W.Status.Unstaged.Count > 0)
+                    {
+                        <button class="gf-btn gf-btn-stage" @onclick="StageAll">Stage all changes</button>
+                    }
+                </HeaderActions>
+            </FileList>
+            <FileList Title="Staged files" Files="W.Status.Staged" Selected="SelectedFile" OnSelect="Open" OnUnstage="@(f => Unstage([f]))" EmptyText="Nothing staged yet">
+                <HeaderActions>
+                    @if (W.Status.Staged.Count > 0)
+                    {
+                        <button class="gf-btn gf-btn-ghost" @onclick="UnstageAll">Unstage all</button>
+                    }
+                </HeaderActions>
+            </FileList>
+        </div>
+
+        <div class="gf-compose">
+            <div class="gf-compose-title">Commit message</div>
+            <div class="gf-summary-wrap">
+                <input @ref="_summaryBox" class="gf-input gf-summary" placeholder="Summary" @bind="_summary" @bind:event="oninput" aria-label="Commit summary" />
+                <span class="gf-summary-count @(_summary.Length > 72 ? "over" : null)">@_summary.Length</span>
+            </div>
+            <textarea class="gf-input gf-description" placeholder="Description" rows="4" @bind="_description" @bind:event="oninput" aria-label="Commit description"></textarea>
+            <div class="gf-compose-options">
+                <MudCheckBox T="bool" Value="_amend" ValueChanged="SetAmend" Size="Size.Small" Dense="true" Label="Amend" />
+                <MudCheckBox T="bool" @bind-Value="_signOff" Size="Size.Small" Dense="true" Label="Sign-off" />
+                <MudCheckBox T="bool" @bind-Value="_pushAfter" Size="Size.Small" Dense="true" Label="Push after" />
+            </div>
+            <button class="gf-commit-button" disabled="@(!CanCommit)" @onclick="Commit" title="Ctrl+Enter">@CommitLabel</button>
+        </div>
+    }
+    else if (_details is { } d)
+    {
+        var parents = d.Summary.ParentShas;
+        <div class="gf-panel-head">
+            <span class="gf-dim">commit</span>
+            <span class="gf-mono">@d.Summary.Sha[..10]</span>
+            <MudTooltip Text="Copy full SHA">
+                <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small" OnClick="@(() => Copy(d.Summary.Sha))" aria-label="Copy SHA" />
+            </MudTooltip>
+            <span class="gf-spacer"></span>
+            @if (parents.Count > 0)
+            {
+                <span class="gf-dim gf-small">parent@(parents.Count > 1 ? "s" : null)</span>
+                @foreach (var p in parents)
+                {
+                    <button class="gf-sha-link" title="Go to parent" @onclick="@(() => W.SelectCommit(p, reveal: true))">@p[..7]</button>
+                }
+            }
+        </div>
+        <div class="gf-commit-card">
+            <div class="gf-commit-subject">@d.Summary.Subject</div>
+            @if (Body is { Length: > 0 } body)
+            {
+                <pre class="gf-commit-body">@body</pre>
+            }
+            <div class="gf-author-row">
+                <Avatar Name="@d.Summary.AuthorName" Email="@d.Summary.AuthorEmail" />
+                <div>
+                    <div><strong>@d.Summary.AuthorName</strong> <span class="gf-dim gf-small">&lt;@d.Summary.AuthorEmail&gt;</span></div>
+                    <div class="gf-dim gf-small">authored @d.Summary.AuthorDate.LocalDateTime.ToString("f", CultureInfo.CurrentCulture)</div>
+                    @if (d.CommitterEmail != d.Summary.AuthorEmail)
+                    {
+                        <div class="gf-dim gf-small">committed by @d.CommitterName · @d.CommitDate.LocalDateTime.ToString("g", CultureInfo.CurrentCulture)</div>
+                    }
+                </div>
+            </div>
+        </div>
+        <div class="gf-group-head">
+            <span class="gf-group-title">@d.Changes.Count changed file@(d.Changes.Count == 1 ? string.Empty : "s")</span>
+            <span class="gf-spacer"></span>
+            <span class="gf-wip-stats">
+                @if (d.Changes.Count(c => c.Kind == FileChangeKind.Modified) is > 0 and var m) { <span class="mod">✎ @m</span> }
+                @if (d.Changes.Count(c => c.Kind is FileChangeKind.Added or FileChangeKind.Copied) is > 0 and var a) { <span class="add">+ @a</span> }
+                @if (d.Changes.Count(c => c.Kind == FileChangeKind.Deleted) is > 0 and var x) { <span class="del">− @x</span> }
+            </span>
+        </div>
+        <div class="gf-list gf-panel-files">
+            @foreach (var f in d.Changes)
+            {
+                <div class="gf-file-row @(W.OpenDiff?.CommitFile == f && W.OpenDiff?.CommitSha == d.Summary.Sha ? "selected" : null)" @onclick="@(() => W.ShowDiff(new DiffTarget(null, d.Summary.Sha, f)))"
+                     title="@(f.OldPath is null ? f.Path : $"{f.OldPath} → {f.Path}")">
+                    <StatusGlyph Kind="f.Kind" />
+                    <span class="gf-ellipsis"><span class="gf-filename">@System.IO.Path.GetFileName(f.Path)</span> <span class="gf-dim">@System.IO.Path.GetDirectoryName(f.Path)?.Replace('\\', '/')</span></span>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="gf-empty">@(_loading ? "Loading…" : "Select a commit, or the WIP row to stage and commit.")</div>
+    }
+</div>
+
+@code {
+    private string? _loadedSha;
+    private CommitDetails? _details;
+    private bool _loading;
+    private string _summary = string.Empty;
+    private string _description = string.Empty;
+    private bool _amend, _signOff, _pushAfter;
+    private ElementReference _summaryBox;
+
+    private FileStatusEntry? SelectedFile => W.Center == CenterView.Diff ? W.OpenDiff?.Working : null;
+
+    private string Message => string.IsNullOrWhiteSpace(_description) ? _summary.Trim() : $"{_summary.Trim()}\n\n{_description.Trim()}";
+
+    private bool CanCommit => !W.IsBusy && W.Status.Conflicted.Count == 0 && (_amend || (W.Status.Staged.Count > 0 && _summary.Trim().Length > 0));
+
+    private string CommitLabel =>
+        _amend ? "Amend previous commit"
+        : W.Status.Staged.Count == 0 ? "Stage changes to commit"
+        : _summary.Trim().Length == 0 ? "Enter a summary to commit"
+        : $"Commit changes to {W.Status.Staged.Count} file{(W.Status.Staged.Count == 1 ? string.Empty : "s")}";
+
+    private IEnumerable<FileStatusEntry> AllFiles => W.Status.Conflicted.Concat(W.Status.Unstaged).Concat(W.Status.Staged);
+
+    private string? Body
+    {
+        get
+        {
+            var msg = _details?.FullMessage.TrimEnd();
+            var nl = msg?.IndexOf('\n', StringComparison.Ordinal) ?? -1;
+            return nl < 0 ? null : msg![(nl + 1)..].Trim('\n', '\r');
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        W.Changed += OnChanged;
+        Shortcuts.Command += OnCommand;
+    }
+
+    protected override Task OnParametersSetAsync() => LoadDetailsAsync();
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadDetailsAsync();
+        StateHasChanged();
+    });
+
+    private async Task LoadDetailsAsync()
+    {
+        var sha = W.WipSelected ? null : W.SelectedCommitSha;
+        if (sha == _loadedSha || W.Repo is not { } repo) return;
+        _loadedSha = sha;
+        _details = null;
+        if (sha is null) return;
+
+        _loading = true;
+        try
+        {
+            var details = await Task.Run(() => repo.Read.GetCommitDetailsAsync(sha));
+            if (sha == _loadedSha) _details = details;
+        }
+        catch (Exception ex)
+        {
+            W.Error("Load commit", ex);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void Open(FileStatusEntry f) => W.ShowDiff(new DiffTarget(f, null, null));
+
+    private Task Stage(IReadOnlyCollection<FileStatusEntry> files) =>
+        W.RunAsync("Staging", (r, _) => r.Index.StageAsync(files.Select(f => f.Path).ToList()));
+
+    private Task Unstage(IReadOnlyCollection<FileStatusEntry> files) =>
+        W.RunAsync("Unstaging", (r, _) => r.Index.UnstageAsync(files.SelectMany(f => f.OldPath is null ? [f.Path] : new[] { f.Path, f.OldPath }).ToList()));
+
+    private Task StageAll() => W.RunAsync("Staging all", (r, _) => r.Index.StageAllAsync());
+
+    private Task UnstageAll() => W.RunAsync("Unstaging all", (r, _) => r.Index.UnstageAllAsync());
+
+    private async Task Discard(IReadOnlyCollection<FileStatusEntry> files)
+    {
+        if (files.Count == 0) return;
+        var what = files.Count == 1 ? $"'{files.First().Path}'" : $"{files.Count} files";
+        if (await Dialogs.ShowMessageBoxAsync("Discard changes", $"Discard all changes to {what}? You can undo this with Ctrl+Z until your next action.", yesText: "Discard", cancelText: "Cancel") != true) return;
+        var list = files.ToList();
+        await W.RunUndoableAsync("Discarding", r => UndoableOperations.DiscardAsync(r, () => r.Index.DiscardAsync(list), list.Select(f => f.Path).ToList()));
+    }
+
+    private async Task SetAmend(bool value)
+    {
+        _amend = value;
+        if (value && string.IsNullOrWhiteSpace(_summary) && W.Repo is { } repo)
+        {
+            var msg = (await repo.Index.GetHeadMessageAsync())?.TrimEnd() ?? string.Empty;
+            var nl = msg.IndexOf('\n', StringComparison.Ordinal);
+            _summary = nl < 0 ? msg : msg[..nl].Trim();
+            _description = nl < 0 ? string.Empty : msg[(nl + 1)..].Trim('\n', '\r');
+        }
+    }
+
+    private async Task Commit()
+    {
+        if (!CanCommit) return;
+        var request = new CommitRequest(Message, _amend, _signOff, AllowEmpty: _amend && W.Status.Staged.Count == 0);
+        var ok = await W.RunUndoableAsync(_amend ? "Amending" : "Committing", r => UndoableOperations.CommitAsync(r, request), _amend ? "Commit amended (Ctrl+Z to undo)" : "Committed (Ctrl+Z to undo)");
+        if (!ok) return;
+        _summary = _description = string.Empty;
+        _amend = false;
+        if (_pushAfter) await W.PushAsync();
+    }
+
+    private async Task Copy(string text)
+    {
+        await JS.InvokeVoidAsync("gitforge.copyText", text);
+        W.Info("Copied SHA");
+    }
+
+    private async Task OnCommand(string command)
+    {
+        if (command == "commit.submit" && W.WipSelected)
+        {
+            await Commit();
+            return;
+        }
+
+        if (!W.PanelFocused) return;
+
+        // Commit mode: j/k walk the changed files and preview each diff in the center pane.
+        if (!W.WipSelected)
+        {
+            if (_details is not { Changes.Count: > 0 } d) return;
+            var cur = W.OpenDiff?.CommitSha == d.Summary.Sha && W.OpenDiff.CommitFile is { } cf ? d.Changes.ToList().IndexOf(cf) : -1;
+            var next = command switch
+            {
+                "nav.down" => Math.Min(cur + 1, d.Changes.Count - 1),
+                "nav.up" => Math.Max(cur - 1, 0),
+                "nav.top" => 0,
+                "nav.bottom" => d.Changes.Count - 1,
+                _ => -1,
+            };
+            if (next >= 0) W.ShowDiff(new DiffTarget(null, d.Summary.Sha, d.Changes[next]));
+            return;
+        }
+
+        // WIP mode: j/k walk files (previewing diffs); s/u/d act on the file under the cursor.
+        var all = AllFiles.ToList();
+        var current = SelectedFile is { } s ? all.FindIndex(f => f.Path == s.Path && f.Area == s.Area) : -1;
+        var focused = current >= 0 ? all[current] : null;
+        switch (command)
+        {
+            case "nav.down" when all.Count > 0: Open(all[Math.Min(current + 1, all.Count - 1)]); break;
+            case "nav.up" when all.Count > 0: Open(all[Math.Max(current - 1, 0)]); break;
+            case "nav.top" when all.Count > 0: Open(all[0]); break;
+            case "nav.bottom" when all.Count > 0: Open(all[^1]); break;
+            case "search.focus": await _summaryBox.FocusAsync(); break;
+            case "nav.open" when focused is not null:
+                W.PanelFocused = false; // move keyboard focus into the diff for hunk/line staging
+                W.Notify();
+                break;
+            case "item.stage" when focused is { Area: StagingArea.Unstaged, Kind: not FileChangeKind.Conflicted }: await Stage([focused]); break;
+            case "item.unstage" when focused is { Area: StagingArea.Staged }: await Unstage([focused]); break;
+            case "item.discard" when focused is { Area: StagingArea.Unstaged, Kind: not FileChangeKind.Conflicted }: await Discard([focused]); break;
+        }
+    }
+
+    public void Dispose()
+    {
+        W.Changed -= OnChanged;
+        Shortcuts.Command -= OnCommand;
+    }
+}

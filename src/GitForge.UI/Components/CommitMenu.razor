@@ -1,3 +1,4 @@
+@using GitForge.Git.Undo
 @inject RepoWorkspace W
 @inject IDialogService Dialogs
 @inject IJSRuntime JS
@@ -21,12 +22,12 @@
 
     private Task Run(string label, Func<IGitRepository, Task> op, string? success = null) => W.RunAsync(label, (r, _) => op(r), success);
 
-    private Task Checkout() => Run($"Checking out {Commit.ShortSha}", r => r.Branches.CheckoutAsync(Commit.Sha));
+    private Task Checkout() => W.CheckoutAsync(Commit.Sha);
 
     private async Task NewBranch()
     {
         var name = await TextPromptDialog.ShowAsync(Dialogs, $"New branch at {Commit.ShortSha}", "Branch name", string.Empty, validateRef: true);
-        if (name is not null) await Run($"Creating {name}", r => r.Branches.CreateAsync(name, Commit.Sha, checkout: true), $"Created and checked out {name}");
+        if (name is not null) await W.RunUndoableAsync($"Creating {name}", r => UndoableOperations.CreateBranchAsync(r, name, Commit.Sha, checkout: true), $"Created and checked out {name}");
     }
 
     private async Task NewTag()
@@ -56,7 +57,7 @@
             return;
         }
 
-        await Run($"Resetting to {Commit.ShortSha}", r => r.History.ResetAsync(Commit.Sha, mode));
+        await W.RunUndoableAsync($"Resetting to {Commit.ShortSha}", r => UndoableOperations.ResetAsync(r, Commit.Sha, mode), "Reset complete (Ctrl+Z to undo)");
     }
 
     private async Task InteractiveRebase()

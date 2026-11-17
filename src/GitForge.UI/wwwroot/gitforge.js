@@ -24,7 +24,8 @@
       const key = e.key;
       let handled = false;
 
-      if (ctrl && ctrlKeys.has(key.toLowerCase())) handled = !dialogOpen();
+      if (ctrl && (key.toLowerCase() === "z" || key.toLowerCase() === "y")) handled = !inInput && !dialogOpen(); // keep native text undo
+      else if (ctrl && ctrlKeys.has(key.toLowerCase())) handled = !dialogOpen();
       else if (key === "F5") handled = true;
       else if (key === "Escape") handled = !dialogOpen();
       else if (!ctrl && !e.altKey && !inInput && !dialogOpen() && plainKeys.has(key)) {

@@ -25,8 +25,11 @@ public interface IGitRepository : IAsyncDisposable
     IHistoryOperations History { get; }
     ISubmoduleOperations Submodules { get; }
 
-    /// <summary>Runs an arbitrary git command in this repository (integrated console).</summary>
+    /// <summary>Runs an arbitrary git command in this repository (integrated console). Treated as a write: caches refresh.</summary>
     Task<GitResult> RunRawAsync(IReadOnlyList<string> arguments, IProgress<string>? output = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Runs a read-only git command (rev-parse, symbolic-ref…) without triggering a repository refresh.</summary>
+    Task<GitResult> QueryAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default);
 }
 
 public interface IGitRepositoryFactory

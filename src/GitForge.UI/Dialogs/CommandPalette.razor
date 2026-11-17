@@ -1,0 +1,166 @@
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+
+<MudDialog Class="gf-palette" ContentClass="gf-palette-content">
+    <DialogContent>
+        <div class="gf-palette-input">
+            <MudIcon Icon="@Icons.Material.Outlined.Search" Size="Size.Small" />
+            <input @ref="_input" class="gf-input gf-input-ghost" placeholder="Type a command, branch, or repository…" value="@_query"
+                   @oninput="OnInput" @onkeydown="OnKeyDown" aria-label="Command palette search" />
+        </div>
+        <div class="gf-palette-list" role="listbox">
+            @for (var i = 0; i < _matches.Count; i++)
+            {
+                var index = i;
+                var c = _matches[i];
+                <div class="gf-palette-item @(index == _active ? "active" : null)" role="option" aria-selected="@(index == _active)"
+                     @onclick="@(() => Run(c))" @onmouseenter="@(() => _active = index)">
+                    <MudIcon Icon="@c.Icon" Size="Size.Small" Class="gf-dim" />
+                    <span class="gf-grow gf-ellipsis">@c.Title</span>
+                    <span class="gf-dim gf-small">@c.Group</span>
+                    @if (c.Keys is { } keys)
+                    {
+                        <kbd>@keys</kbd>
+                    }
+                </div>
+            }
+            @if (_matches.Count == 0)
+            {
+                <div class="gf-empty gf-small">No matches</div>
+            }
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    private sealed record PaletteCommand(string Title, string Group, string Icon, string? Keys, Func<Task> Run);
+
+    private ElementReference _input;
+    private string _query = string.Empty;
+    private List<PaletteCommand> _all = [];
+    private List<PaletteCommand> _matches = [];
+    private int _active;
+
+    protected override void OnInitialized()
+    {
+        Func<Task> Cmd(string id) => () => Shortcuts.RaiseAsync(id);
+        var hasRepo = W.Repo is not null;
+        _all =
+        [
+            new("Open repository…", "Repository", Icons.Material.Outlined.FolderOpen, "Ctrl+O", Cmd("repo.open")),
+            new("Clone repository…", "Repository", Icons.Material.Outlined.CloudDownload, "Ctrl+Shift+O", Cmd("repo.clone")),
+            new("Hosting accounts…", "Settings", Icons.Material.Outlined.ManageAccounts, null, Cmd("accounts.open")),
+            new("Settings…", "Settings", Icons.Material.Outlined.Settings, null, Cmd("settings.open")),
+            new("Toggle light / dark theme", "Settings", Icons.Material.Outlined.DarkMode, null, Cmd("theme.toggle")),
+            new("Keyboard shortcuts", "Help", Icons.Material.Outlined.Keyboard, "?", Cmd("help.shortcuts")),
+        ];
+
+        if (hasRepo)
+        {
+            _all.InsertRange(0,
+            [
+                new("Fetch all remotes", "Remote", Icons.Material.Outlined.Sync, "Ctrl+Shift+F", W.FetchAsync),
+                new("Pull (fast-forward if possible)", "Remote", Icons.Material.Outlined.Download, "Ctrl+Shift+L", () => W.PullAsync(PullMode.MergeIfNeeded)),
+                new("Pull (fast-forward only)", "Remote", Icons.Material.Outlined.Download, null, () => W.PullAsync(PullMode.FastForwardOnly)),
+                new("Pull (rebase)", "Remote", Icons.Material.Outlined.Download, null, () => W.PullAsync(PullMode.Rebase)),
+                new("Push", "Remote", Icons.Material.Outlined.Upload, "Ctrl+Shift+P", Cmd("remote.push")),
+                new("Push (force with lease)", "Remote", Icons.Material.Outlined.Upload, null, () => W.PushAsync(force: true)),
+                new("New branch…", "Branch", Icons.Material.Outlined.CallSplit, "Ctrl+B", Cmd("branch.new")),
+                new("Stash changes…", "Stash", Icons.Material.Outlined.Inventory2, "Ctrl+Shift+S", Cmd("stash.save")),
+                new("Pop latest stash", "Stash", Icons.Material.Outlined.Unarchive, null, W.PopStashAsync),
+                new(W.Undo.CanUndo ? $"Undo {W.Undo.UndoDescription}" : "Undo", "Edit", Icons.Material.Outlined.Undo, "Ctrl+Z", Cmd("edit.undo")),
+                new(W.Undo.CanRedo ? $"Redo {W.Undo.RedoDescription}" : "Redo", "Edit", Icons.Material.Outlined.Redo, "Ctrl+Y", Cmd("edit.redo")),
+                new("Go to WIP (stage and commit)", "View", Icons.Material.Outlined.EditNote, "Ctrl+1", Cmd("view.status")),
+                new("Go to commit graph", "View", Icons.Material.Outlined.AccountTree, "Ctrl+2", Cmd("view.history")),
+                new("Reflog — recover lost work", "View", Icons.Material.Outlined.Restore, "Ctrl+3", Cmd("view.reflog")),
+                new("Show all branches in graph", "View", Icons.Material.Outlined.Visibility, null, W.ShowAllRefsAsync),
+                new("Toggle git console", "View", Icons.Material.Outlined.Terminal, "Ctrl+`", Cmd("console.toggle")),
+                new("Pull requests…", "Remote", Icons.Material.Outlined.MergeType, null, Cmd("prs.open")),
+            ]);
+
+            foreach (var b in W.Snapshot?.LocalBranches ?? [])
+            {
+                if (!b.IsCurrent) _all.Add(new($"Checkout {b.Name}", "Branch", Icons.Material.Outlined.Computer, null, () => W.CheckoutAsync(b.Name)));
+            }
+
+            foreach (var b in W.Snapshot?.RemoteBranches ?? [])
+            {
+                var local = b.Name[(b.RemoteName!.Length + 1)..];
+                if (W.Snapshot!.LocalBranches.Any(l => l.Name == local)) continue;
+                _all.Add(new($"Checkout {b.Name} as {local}", "Remote branch", Icons.Material.Outlined.Cloud, null,
+                    () => W.RunAsync($"Checking out {local}", (r, _) => r.Branches.CheckoutRemoteBranchAsync(b.Name, local))));
+            }
+        }
+
+        foreach (var r in W.Settings.RecentRepositories.Where(r => !string.Equals(r, W.Repo?.WorkingDirectory, StringComparison.OrdinalIgnoreCase)))
+        {
+            _all.Add(new($"Open {System.IO.Path.GetFileName(r)}", "Recent", Icons.Material.Outlined.Folder, null, () => W.OpenAsync(r)));
+        }
+
+        Filter();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await _input.FocusAsync();
+    }
+
+    private void OnInput(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? string.Empty;
+        Filter();
+    }
+
+    /// <summary>Subsequence fuzzy match: contiguous and word-start hits score higher.</summary>
+    private void Filter()
+    {
+        var q = _query.Trim();
+        _matches = q.Length == 0
+            ? _all.Take(50).ToList()
+            : _all.Select(c => (c, score: Score(c.Title + " " + c.Group, q)))
+                  .Where(x => x.score > 0)
+                  .OrderByDescending(x => x.score)
+                  .Take(50)
+                  .Select(x => x.c)
+                  .ToList();
+        _active = 0;
+    }
+
+    internal static int Score(string text, string query)
+    {
+        var t = text.ToLowerInvariant();
+        var q = query.ToLowerInvariant();
+        if (t.Contains(q, StringComparison.Ordinal)) return 1000 - t.IndexOf(q, StringComparison.Ordinal);
+        var score = 0;
+        var ti = 0;
+        foreach (var ch in q)
+        {
+            if (ch == ' ') continue;
+            var found = t.IndexOf(ch, ti);
+            if (found < 0) return 0;
+            score += found == ti ? 5 : (found > 0 && t[found - 1] is ' ' or '/' or '-' ? 4 : 1);
+            ti = found + 1;
+        }
+
+        return score;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown": _active = Math.Min(_active + 1, Math.Max(_matches.Count - 1, 0)); break;
+            case "ArrowUp": _active = Math.Max(_active - 1, 0); break;
+            case "Enter" when _matches.Count > 0: await Run(_matches[_active]); break;
+            case "Escape": Dialog.Cancel(); break;
+        }
+    }
+
+    private async Task Run(PaletteCommand c)
+    {
+        Dialog.Close();
+        await c.Run();
+    }
+}

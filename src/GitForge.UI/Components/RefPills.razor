@@ -1,0 +1,55 @@
+@* Branch/tag labels for one commit. A local branch and its same-named remote branch at the same commit share one pill. *@
+@if (_pills.Count > 0)
+{
+    var first = _pills[0];
+    <span class="gf-refpill @(first.Current ? "current" : null) @(first.IsTag ? "tag" : null)" style="--gf-lane:@LaneColor" title="@first.Tooltip">
+        @if (first.Current)
+        {
+            <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Class="gf-refpill-icon" />
+        }
+        @if (first.Local)
+        {
+            <MudIcon Icon="@Icons.Material.Outlined.Computer" Size="Size.Small" Class="gf-refpill-icon" />
+        }
+        @if (first.Remote)
+        {
+            <MudIcon Icon="@Icons.Material.Outlined.Cloud" Size="Size.Small" Class="gf-refpill-icon" />
+        }
+        @if (first.IsTag)
+        {
+            <MudIcon Icon="@Icons.Material.Outlined.LocalOffer" Size="Size.Small" Class="gf-refpill-icon" />
+        }
+        <span class="gf-ellipsis">@first.Name</span>
+    </span>
+    @if (_pills.Count > 1)
+    {
+        <span class="gf-refpill more" style="--gf-lane:@LaneColor" title="@string.Join("\n", _pills.Skip(1).Select(p => p.Tooltip))">+@(_pills.Count - 1)</span>
+    }
+}
+
+@code {
+    [Parameter] public IReadOnlyList<RefLabel>? Labels { get; set; }
+    [Parameter] public string LaneColor { get; set; } = "#888";
+
+    private sealed record Pill(string Name, bool Local, bool Remote, bool IsTag, bool Current, string Tooltip);
+
+    private List<Pill> _pills = [];
+
+    protected override void OnParametersSet()
+    {
+        _pills = [];
+        if (Labels is not { Count: > 0 } labels) return;
+
+        var remotes = labels.Where(l => l.Kind == RefKind.RemoteBranch).ToList();
+        foreach (var l in labels.Where(l => l.Kind is RefKind.LocalBranch).OrderByDescending(l => l.IsCurrent))
+        {
+            var match = remotes.FirstOrDefault(r => r.Name.EndsWith("/" + l.Name, StringComparison.Ordinal));
+            if (match is not null) remotes.Remove(match);
+            _pills.Add(new Pill(l.Name, true, match is not null, false, l.IsCurrent, match is null ? l.Name : $"{l.Name}  ⇄  {match.Name}"));
+        }
+
+        foreach (var l in labels.Where(l => l.Kind == RefKind.Head)) _pills.Insert(0, new Pill("HEAD", false, false, false, true, "Detached HEAD"));
+        foreach (var r in remotes) _pills.Add(new Pill(r.Name, false, true, false, false, r.Name));
+        foreach (var t in labels.Where(l => l.Kind == RefKind.Tag)) _pills.Add(new Pill(t.Name, false, false, true, false, $"tag {t.Name}"));
+    }
+}

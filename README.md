@@ -2,8 +2,11 @@
 
 A fast, keyboard-first Git client for Windows, built with C#/.NET 10, Blazor, and MudBlazor. It is designed as a lightweight replacement for Sourcetree, with GitHub, GitLab, Bitbucket, and Azure DevOps integration (cloud and self-hosted).
 
+- **Graph-centric workspace:** refs on the left, the commit graph in the center (with a WIP row for uncommitted work), and a commit panel on the right for staging, messages, and commit details.
 - **Fast on big repositories:** streamed history, incremental graph layout, and virtualized lists and diffs.
 - **High-velocity staging:** hunk- and line-level stage, unstage, and discard from the keyboard.
+- **Undo/redo (Ctrl+Z / Ctrl+Y):** commit, checkout, branch create/delete, reset, and discard (including untracked files).
+- **Command palette (Ctrl+P):** fuzzy search across actions, branches, and recent repositories; hide or solo branches in the graph.
 - **Advanced Git:** visual interactive rebase, reflog recovery, conflict tools, stash manager, submodules.
 - **Multi-account hosting:** tokens in Windows Credential Manager, repository browser, pull request list.
 - **Secure by default:** no telemetry, HTTPS-only APIs, no plaintext secrets, hooks and signing honored.
@@ -12,7 +15,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and data models, and
 
 ## Requirements
 
-- Windows 10 or 11 (x64) with the WebView2 runtime
+- Windows 10 version 1809 or later, or Windows 11 (x64), with the WebView2 runtime
 - .NET 10 SDK
 - Git for Windows 2.39 or later on `PATH` (Git Credential Manager recommended for HTTPS remotes)
 
@@ -32,6 +35,14 @@ Desktop app (WPF + WebView2):
 dotnet run --project src/GitForge.Desktop
 ```
 
+Open a specific repository on launch (for example, from an Explorer shortcut):
+
+```bash
+GitForge.exe C:\src\my-repo
+```
+
+Set `GITFORGE_SETTINGS` to a JSON file path to use alternate settings (portable installs or isolated test runs).
+
 Browser dev host for UI work (loopback only, http://127.0.0.1:5199):
 
 ```bash
@@ -42,21 +53,24 @@ dotnet run --project src/GitForge.DevHost
 
 | Keys | Action |
 |---|---|
-| Ctrl+1 / Ctrl+2 / Ctrl+3 | File status / History / Reflog |
+| Ctrl+P | Command palette |
+| Ctrl+Z / Ctrl+Y | Undo / redo the last action |
+| Ctrl+1 / Ctrl+2 / Ctrl+3 | Select WIP (stage and commit) / Commit graph / Reflog |
+| Esc | Close the diff or reflog and return to the graph |
 | Ctrl+O / Ctrl+Shift+O | Open / Clone repository |
 | Ctrl+Shift+F / L / P | Fetch / Pull / Push |
 | Ctrl+B | New branch |
 | Ctrl+Shift+S | Stash |
 | Ctrl+Enter | Commit |
 | Ctrl+` | Git console |
-| j / k, gg / G | Next / previous, first / last |
-| h / l | Focus file list / diff |
+| j / k, gg / G | Next / previous, first / last (graph, commit panel, or diff) |
+| h / l | Focus graph / commit panel |
 | s / u / d | Stage / unstage / discard (file, hunk, or selected lines) |
 | Space | Toggle line selection in a diff |
-| / or Ctrl+F | Filter history |
+| / or Ctrl+F | Filter commits |
 | ? | Show all shortcuts |
 
-Right-click branches, tags, stashes, and commits for more actions.
+Click a branch to jump to its commit; double-click to check it out. Hover a branch to hide it from the graph, or right-click to solo it. Right-click branches, tags, stashes, and commits for more actions.
 
 ## Hosting accounts
 

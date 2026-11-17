@@ -1,0 +1,26 @@
+@* The WIP row: a dashed node above HEAD. Lanes passing between the rows above and HEAD continue through it. *@
+@{
+    var g = GraphCell.Geometry;
+    var lane = HeadRow?.NodeLane ?? 0;
+    var cx = g.X(lane);
+    var cy = g.RowHeight / 2;
+    var laneCount = Math.Max(HeadRow?.LaneCount ?? 1, lane + 1);
+    var color = HeadRow is null ? "var(--gf-dim)" : Avatars.LaneColor(HeadRow.NodeColorIndex);
+}
+<svg class="gf-graph" width="@F(g.Width(laneCount))" height="@F(g.RowHeight)" aria-hidden="true">
+    @if (HeadRow is not null)
+    {
+        @foreach (var e in HeadRow.Edges.Where(e => e.Kind is EdgeKind.PassThrough or EdgeKind.IntoNode && e.FromLane != lane))
+        {
+            <path d="@($"M{F(g.X(e.FromLane))},0 L{F(g.X(e.FromLane))},{F(g.RowHeight)}")" stroke="@Avatars.LaneColor(e.ColorIndex)" />
+        }
+        <line class="gf-wip-link" x1="@F(cx)" y1="@F(cy + g.NodeRadius)" x2="@F(cx)" y2="@F(g.RowHeight)" stroke="@color" />
+    }
+    <circle cx="@F(cx)" cy="@F(cy)" r="@F(g.NodeRadius)" class="gf-wip-node" stroke="@color" />
+</svg>
+
+@code {
+    [Parameter] public GraphRow? HeadRow { get; set; }
+
+    private static string F(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
+}

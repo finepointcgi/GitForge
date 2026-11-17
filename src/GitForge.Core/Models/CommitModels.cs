@@ -31,6 +31,9 @@ public sealed record HistoryQuery
 {
     public bool AllRefs { get; init; } = true;
     public string? StartRef { get; init; }
+
+    /// <summary>Explicit tips to walk (hide/solo branches). Overrides <see cref="AllRefs"/> when non-empty.</summary>
+    public IReadOnlyList<string>? Refs { get; init; }
     public string? PathFilter { get; init; }
     public DateTimeOffset? Since { get; init; }
     public DateTimeOffset? Until { get; init; }

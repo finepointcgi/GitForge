@@ -1,0 +1,113 @@
+@implements IDisposable
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+
+<header class="gf-toolbar">
+    <div class="gf-crumbs">
+        <MudMenu Dense="true" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" MaxHeight="480">
+            <ActivatorContent Context="menu">
+                <button class="gf-crumb" title="Repository" @onclick="@(e => menu.ToggleAsync(e))">
+                    <MudIcon Icon="@Icons.Material.Outlined.Folder" Size="Size.Small" />
+                    <span class="gf-ellipsis">@(W.Repo?.Name ?? "Open a repository")</span>
+                    <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                </button>
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem Icon="@Icons.Material.Outlined.FolderOpen" OnClick="@(() => Shortcuts.RaiseAsync("repo.open"))">Open… (Ctrl+O)</MudMenuItem>
+                <MudMenuItem Icon="@Icons.Material.Outlined.CloudDownload" OnClick="@(() => Shortcuts.RaiseAsync("repo.clone"))">Clone… (Ctrl+Shift+O)</MudMenuItem>
+                @if (W.Settings.RecentRepositories.Count > 0)
+                {
+                    <MudDivider />
+                    @foreach (var r in W.Settings.RecentRepositories.Take(12))
+                    {
+                        <MudMenuItem OnClick="@(() => W.OpenAsync(r))">
+                            <span class="gf-filename">@System.IO.Path.GetFileName(r)</span> <span class="gf-dim gf-small gf-mono">@r</span>
+                        </MudMenuItem>
+                    }
+                }
+            </ChildContent>
+        </MudMenu>
+        @if (W.Snapshot is { } s)
+        {
+            <span class="gf-crumb-sep">›</span>
+            <MudMenu Dense="true" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" MaxHeight="480">
+                <ActivatorContent Context="menu">
+                    <button class="gf-crumb" title="Current branch — click to switch" @onclick="@(e => menu.ToggleAsync(e))">
+                        <MudIcon Icon="@Icons.Material.Outlined.CallSplit" Size="Size.Small" />
+                        <span class="gf-ellipsis">@(s.HeadBranch ?? $"detached {s.HeadSha?[..7]}")</span>
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                    </button>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem Icon="@Icons.Material.Outlined.Add" OnClick="@(() => Shortcuts.RaiseAsync("branch.new"))">New branch… (Ctrl+B)</MudMenuItem>
+                    <MudDivider />
+                    @foreach (var b in s.LocalBranches.Take(40))
+                    {
+                        <MudMenuItem Disabled="@b.IsCurrent" OnClick="@(() => W.CheckoutAsync(b.Name))">@(b.IsCurrent ? "✓ " : null)@b.Name</MudMenuItem>
+                    }
+                </ChildContent>
+            </MudMenu>
+        }
+    </div>
+
+    <div class="gf-toolbar-actions">
+        <ToolbarButton Icon="@Icons.Material.Outlined.Undo" Label="Undo" Hint="@(W.Undo.CanUndo ? $"Undo {W.Undo.UndoDescription} (Ctrl+Z)" : "Nothing to undo")" Disabled="@(!W.Undo.CanUndo || W.IsBusy)" OnClick="@(() => Shortcuts.RaiseAsync("edit.undo"))" />
+        <ToolbarButton Icon="@Icons.Material.Outlined.Redo" Label="Redo" Hint="@(W.Undo.CanRedo ? $"Redo {W.Undo.RedoDescription} (Ctrl+Y)" : "Nothing to redo")" Disabled="@(!W.Undo.CanRedo || W.IsBusy)" OnClick="@(() => Shortcuts.RaiseAsync("edit.redo"))" />
+        <span class="gf-toolbar-sep"></span>
+        <div class="gf-split">
+            <ToolbarButton Icon="@Icons.Material.Outlined.Download" Label="Pull" Hint="Pull — fast-forward if possible (Ctrl+Shift+L)" Disabled="@NoRepo" Badge="@(W.CurrentBranchHead?.Behind ?? 0)" OnClick="@(() => Shortcuts.RaiseAsync("remote.pull"))" />
+            <MudMenu Dense="true" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Disabled="@NoRepo">
+                <ActivatorContent Context="menu">
+                    <button class="gf-split-arrow" disabled="@NoRepo" title="Pull options" aria-label="Pull options" @onclick="@(e => menu.ToggleAsync(e))">
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                    </button>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem Icon="@Icons.Material.Outlined.Sync" OnClick="W.FetchAsync">Fetch all (Ctrl+Shift+F)</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => W.PullAsync(PullMode.MergeIfNeeded))">Pull (fast-forward if possible)</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => W.PullAsync(PullMode.FastForwardOnly))">Pull (fast-forward only)</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => W.PullAsync(PullMode.Rebase))">Pull (rebase)</MudMenuItem>
+                </ChildContent>
+            </MudMenu>
+        </div>
+        <ToolbarButton Icon="@Icons.Material.Outlined.Upload" Label="Push" Hint="Push (Ctrl+Shift+P)" Disabled="@NoRepo" Badge="@(W.CurrentBranchHead?.Ahead ?? 0)" OnClick="@(() => Shortcuts.RaiseAsync("remote.push"))" />
+        <span class="gf-toolbar-sep"></span>
+        <ToolbarButton Icon="@Icons.Material.Outlined.CallSplit" Label="Branch" Hint="New branch (Ctrl+B)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("branch.new"))" />
+        <ToolbarButton Icon="@Icons.Material.Outlined.Inventory2" Label="Stash" Hint="Stash changes (Ctrl+Shift+S)" Disabled="@(NoRepo || !W.HasWip)" OnClick="@(() => Shortcuts.RaiseAsync("stash.save"))" />
+        <ToolbarButton Icon="@Icons.Material.Outlined.Unarchive" Label="Pop" Hint="Pop the latest stash" Disabled="@(NoRepo || W.Snapshot?.Stashes.Count is null or 0)" OnClick="@(() => Shortcuts.RaiseAsync("stash.pop"))" />
+        <span class="gf-toolbar-sep"></span>
+        <ToolbarButton Icon="@Icons.Material.Outlined.Terminal" Label="Console" Hint="Git console (Ctrl+`)" Active="@W.ConsoleOpen" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("console.toggle"))" />
+    </div>
+
+    <div class="gf-toolbar-right">
+        <button class="gf-palette-launch" @onclick="@(() => Shortcuts.RaiseAsync("palette.open"))" title="Command palette">
+            <MudIcon Icon="@Icons.Material.Outlined.Search" Size="Size.Small" />
+            <span>Search commands</span>
+            <kbd>Ctrl+P</kbd>
+        </button>
+        <MudTooltip Text="Pull requests">
+            <MudIconButton Icon="@Icons.Material.Outlined.MergeType" Size="Size.Small" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("prs.open"))" aria-label="Pull requests" />
+        </MudTooltip>
+        <MudTooltip Text="Hosting accounts">
+            <MudIconButton Icon="@Icons.Material.Outlined.ManageAccounts" Size="Size.Small" OnClick="@(() => Shortcuts.RaiseAsync("accounts.open"))" aria-label="Hosting accounts" />
+        </MudTooltip>
+        <MudTooltip Text="Toggle light or dark theme">
+            <MudIconButton Icon="@(Dark ? Icons.Material.Outlined.LightMode : Icons.Material.Outlined.DarkMode)" Size="Size.Small" OnClick="@(() => Shortcuts.RaiseAsync("theme.toggle"))" aria-label="Toggle light or dark theme" />
+        </MudTooltip>
+        <MudTooltip Text="Settings">
+            <MudIconButton Icon="@Icons.Material.Outlined.Settings" Size="Size.Small" OnClick="@(() => Shortcuts.RaiseAsync("settings.open"))" aria-label="Settings" />
+        </MudTooltip>
+    </div>
+</header>
+
+@code {
+    [Parameter] public bool Dark { get; set; }
+
+    private bool NoRepo => W.Repo is null;
+
+    protected override void OnInitialized() => W.Changed += OnChanged;
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => W.Changed -= OnChanged;
+}

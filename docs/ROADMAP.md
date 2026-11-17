@@ -7,7 +7,7 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 | Area | Item | Status |
 |---|---|---|
 | Platform | Layered solution (Core / Git / Platform / Hosting / UI / hosts), central package management, analyzers at zero warnings | ✅ |
-| Platform | WPF desktop host (WebView2) and loopback-only dev host | ✅ (desktop host builds; UI verified through the dev host) |
+| Platform | WPF desktop host (WebView2) and loopback-only dev host | ✅ (desktop app launch and render verified) |
 | Git engine | libgit2 reads on a per-repo actor thread; git CLI for writes and network; debounced file watcher | ✅ |
 | History | Streaming `git log`, incremental lane layout, virtualized 26 px rows, ref badges | ✅ |
 | History | Instant filter: text, SHA, `author:`, `path:`, `since:`, `until:` | ✅ |
@@ -25,6 +25,12 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 | Hosting | GitHub, GitLab, Bitbucket Cloud, Azure DevOps (cloud and server) accounts; token validation; keyring storage | ✅ |
 | Hosting | Browse and clone account repositories; list open PRs/MRs; "create PR" deep links | ✅ |
 | UX | Keyboard-first (Ctrl shortcuts + vim keys), resizable panes, dark/light/system theme, accent color | ✅ |
+| UX | Graph-centric 3-pane layout: refs panel, graph with WIP row and Branch/Tag column, commit panel (summary/description) | ✅ |
+| UX | Offline author-initial avatars on graph nodes (no Gravatar or network lookups) | ✅ |
+| UX | Command palette (Ctrl+P): actions, branch checkout, recent repositories | ✅ |
+| UX | Hide/solo branches in the graph; branch folders; click a ref to jump to its commit | ✅ |
+| Safety | Single-level undo/redo: commit, checkout, branch create/delete, reset, discard (tracked and untracked) | ✅ |
+| Platform | `GitForge.exe <path>` opens a repository; `GITFORGE_SETTINGS` selects an alternate settings file | ✅ |
 | Console | Integrated git command console bound to the active repository | 🟡 (argv console; full PTY terminal in Phase 3) |
 | Submodules | List with state, update `--init --recursive`, open submodule | 🟡 (recursive status tree in Phase 3) |
 
@@ -32,7 +38,7 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 
 - ⬜ Syntax highlighting in diffs via TextMateSharp (tokenize visible rows only).
 - ⬜ Built-in 3-way merge editor (base/ours/theirs with per-chunk accept) alongside external tools (KDiff3, Beyond Compare, VS Code).
-- ⬜ Command palette (Ctrl+K) for every action; customizable key bindings.
+- ⬜ Customizable key bindings; drag a branch onto another to merge or rebase.
 - ⬜ File history and blame views; multi-select cherry-pick; compare any two commits/branches.
 - ⬜ Stash preview pane and hunk-level stash (`git stash push --patch` equivalent via patches).
 - ⬜ Line staging for new (untracked) files via intent-to-add.

@@ -84,6 +84,7 @@ public static class UiServiceCollectionExtensions
         services.AddScoped<RepoWorkspace>();
         services.AddScoped<ShortcutService>();
         services.AddSingleton<IPlatformShell, DefaultPlatformShell>();
+        services.AddSingleton(new StartupOptions(null));
         return services;
     }
 }

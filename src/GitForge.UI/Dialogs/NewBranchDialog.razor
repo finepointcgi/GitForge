@@ -1,3 +1,4 @@
+@using GitForge.Git.Undo
 @using GitForge.Core.Validation
 @inject RepoWorkspace W
 
@@ -33,6 +34,7 @@
         if (Error is not null) return;
         Dialog.Close();
         var name = _name.Trim();
-        await W.RunAsync($"Creating {name}", (r, _) => r.Branches.CreateAsync(name, string.IsNullOrWhiteSpace(_start) ? "HEAD" : _start.Trim(), _checkout), $"Created {name}");
+        var start = string.IsNullOrWhiteSpace(_start) ? "HEAD" : _start.Trim();
+        await W.RunUndoableAsync($"Creating {name}", r => UndoableOperations.CreateBranchAsync(r, name, start, _checkout), $"Created {name} (Ctrl+Z to undo)");
     }
 }

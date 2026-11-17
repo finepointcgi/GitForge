@@ -3,6 +3,8 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- CA1707: Method_Condition_Result names are the xUnit convention. xUnit1051: per-call test cancellation tokens add noise to short integration tests. -->
+    <NoWarn>$(NoWarn);CA1707;xUnit1051</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <Using Include="Xunit" />

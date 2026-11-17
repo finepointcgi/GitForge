@@ -46,6 +46,9 @@ public sealed class GitRepository : IGitRepository
     public Task<GitResult> RunRawAsync(IReadOnlyList<string> arguments, IProgress<string>? output = null, CancellationToken cancellationToken = default) =>
         _ctx.TryWriteAsync(arguments, cancellationToken, progress: output);
 
+    public Task<GitResult> QueryAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default) =>
+        _ctx.RunAsync(arguments, cancellationToken);
+
     public ValueTask DisposeAsync()
     {
         _watcher.Dispose();

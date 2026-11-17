@@ -32,6 +32,9 @@ public sealed record AppSettings
     public bool FetchOnOpen { get; init; } = true;
     public int AutoFetchMinutes { get; init; } = 10;
     public bool SideBySideDiff { get; init; }
+    public bool ShowAuthorColumn { get; init; } = true;
+    public bool ShowDateColumn { get; init; } = true;
+    public bool ShowShaColumn { get; init; }
     public bool IgnoreWhitespace { get; init; }
     public IReadOnlyList<string> RecentRepositories { get; init; } = [];
     public IReadOnlyList<HostingAccount> Accounts { get; init; } = [];

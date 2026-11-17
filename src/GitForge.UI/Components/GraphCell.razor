@@ -1,22 +1,48 @@
-@* One row of the commit graph. Pure SVG; geometry comes from GitForge.Core so every renderer draws identically. *@
-<svg class="gf-graph" width="@Geometry.Width(Row.LaneCount).ToString(CultureInfo.InvariantCulture)" height="@Geometry.RowHeight.ToString(CultureInfo.InvariantCulture)" aria-hidden="true">
+@* One commit row of the graph. Geometry comes from GitForge.Core so every renderer draws identically. *@
+@{
+    var g = Geometry;
+    var cx = g.X(Row.NodeLane);
+    var cy = g.RowHeight / 2;
+    var color = Avatars.LaneColor(Row.NodeColorIndex);
+}
+<svg class="gf-graph" width="@F(g.Width(Row.LaneCount))" height="@F(g.RowHeight)" aria-hidden="true">
+    @if (HasRefs && cx > g.NodeRadius)
+    {
+        <line class="gf-ref-connector" x1="0" y1="@F(cy)" x2="@F(cx - g.NodeRadius)" y2="@F(cy)" stroke="@color" />
+    }
+    @if (WipAbove)
+    {
+        <line class="gf-wip-link" x1="@F(cx)" y1="0" x2="@F(cx)" y2="@F(cy - g.NodeRadius)" stroke="@color" />
+    }
     @foreach (var e in Row.Edges)
     {
-        <path d="@Geometry.PathFor(e, Row.NodeLane)" stroke="@Color(e.ColorIndex)" />
+        <path d="@g.PathFor(e, Row.NodeLane)" stroke="@Avatars.LaneColor(e.ColorIndex)" />
     }
-    <circle cx="@Geometry.X(Row.NodeLane).ToString(CultureInfo.InvariantCulture)"
-            cy="@((Geometry.RowHeight / 2).ToString(CultureInfo.InvariantCulture))"
-            r="@Geometry.NodeRadius.ToString(CultureInfo.InvariantCulture)"
-            class="@(Row.Commit.IsMerge ? "merge" : null)"
-            stroke="@Color(Row.NodeColorIndex)"
-            fill="@(IsHead ? "var(--mud-palette-surface)" : Color(Row.NodeColorIndex))" />
+    @if (Row.Commit.IsMerge)
+    {
+        <circle cx="@F(cx)" cy="@F(cy)" r="5" fill="@color" class="gf-merge-dot" />
+    }
+    else
+    {
+        @if (IsHead)
+        {
+            <circle cx="@F(cx)" cy="@F(cy)" r="@F(g.NodeRadius + 3)" fill="none" stroke="@color" class="gf-head-ring" />
+        }
+        <circle cx="@F(cx)" cy="@F(cy)" r="@F(g.NodeRadius)" fill="@color" class="gf-avatar-node" />
+        @* Razor reserves <text>; emit the SVG text element as encoded markup. *@
+        @((MarkupString)$"<text x=\"{F(cx)}\" y=\"{F(cy)}\" class=\"gf-avatar-text\">{System.Net.WebUtility.HtmlEncode(Avatars.Initials(Row.Commit.AuthorName))}</text>")
+    }
 </svg>
 
 @code {
-    public static readonly GraphGeometry Geometry = new();
+    public static readonly GraphGeometry Geometry = new(LaneWidth: 22, RowHeight: 32, NodeRadius: 10);
 
     [Parameter, EditorRequired] public GraphRow Row { get; set; } = default!;
     [Parameter] public bool IsHead { get; set; }
+    [Parameter] public bool HasRefs { get; set; }
 
-    private static string Color(int index) => GitForgeTheme.LaneColors[index % GitForgeTheme.LaneColors.Length];
+    /// <summary>The WIP row sits directly above this (HEAD) row: draw the dashed link into the node.</summary>
+    [Parameter] public bool WipAbove { get; set; }
+
+    private static string F(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
 }

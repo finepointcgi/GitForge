@@ -1,0 +1,7 @@
+<span class="gf-avatar @(Small ? "small" : null)" style="background:@Avatars.ColorFor(Email)" title="@Name">@Avatars.Initials(Name)</span>
+
+@code {
+    [Parameter] public string? Name { get; set; }
+    [Parameter] public string? Email { get; set; }
+    [Parameter] public bool Small { get; set; }
+}

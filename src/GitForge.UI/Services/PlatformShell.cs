@@ -2,6 +2,9 @@ using System.Diagnostics;
 
 namespace GitForge.UI.Services;
 
+/// <summary>Host start-up options, e.g. a repository path passed on the command line (<c>GitForge.exe C:\src\repo</c>).</summary>
+public sealed record StartupOptions(string? OpenPath);
+
 /// <summary>Host-specific shell integration (native folder picker, browser, file explorer).</summary>
 public interface IPlatformShell
 {

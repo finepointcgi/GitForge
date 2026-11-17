@@ -1,0 +1,22 @@
+<span class="gf-wip-stats">
+    @if (_modified > 0) { <span class="mod" title="Modified">✎ @_modified</span> }
+    @if (_added > 0) { <span class="add" title="Added or untracked">+ @_added</span> }
+    @if (_deleted > 0) { <span class="del" title="Deleted">− @_deleted</span> }
+    @if (Status.Conflicted.Count > 0) { <span class="conflict" title="Conflicts">! @Status.Conflicted.Count</span> }
+</span>
+
+@code {
+    [Parameter, EditorRequired] public WorkingCopyStatus Status { get; set; } = WorkingCopyStatus.Empty;
+
+    private int _modified, _added, _deleted;
+
+    protected override void OnParametersSet()
+    {
+        // Count each path once even if it is both staged and unstaged.
+        var byPath = new Dictionary<string, FileChangeKind>(StringComparer.Ordinal);
+        foreach (var f in Status.Staged.Concat(Status.Unstaged)) byPath.TryAdd(f.Path, f.Kind);
+        _added = byPath.Values.Count(k => k is FileChangeKind.Added or FileChangeKind.Untracked or FileChangeKind.Copied);
+        _deleted = byPath.Values.Count(k => k is FileChangeKind.Deleted);
+        _modified = byPath.Count - _added - _deleted;
+    }
+}
