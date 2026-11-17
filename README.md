@@ -48,6 +48,7 @@ GitForge.exe C:\src\my-repo
 ```
 
 Set `GITFORGE_SETTINGS` to a JSON file path to use alternate settings (portable installs or isolated test runs).
+Set `GITFORGE_TRACE_STARTUP` to a log file path to record startup milestones and step durations (first two minutes only).
 
 Browser dev host for UI work (loopback only, http://127.0.0.1:5199):
 

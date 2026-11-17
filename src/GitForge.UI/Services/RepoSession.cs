@@ -50,6 +50,7 @@ public sealed class RepoSession : IAsyncDisposable
     internal int Refreshing;
     internal readonly Lock RefreshSync = new();
     internal RepositoryChangeKind PendingRefresh;
+    internal int SubmoduleStatusVersion; // newest background submodule-status request wins
 
     /// <summary>Changes that arrived while this tab was in the background; applied when it is activated.</summary>
     internal RepositoryChangeKind StaleKinds;

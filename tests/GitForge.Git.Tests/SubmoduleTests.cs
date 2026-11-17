@@ -76,12 +76,30 @@ public class SubmoduleTests
 
         await repo.Branches.CheckoutAsync("HEAD~1"); // records sub@c2; plain checkout leaves the submodule at c1
         Assert.Equal(f.SubC1, (await f.Super.GitAsync("-C", "libs/sub", "rev-parse", "HEAD")).Trim());
+        var stale = await repo.Submodules.GetRecursiveStatusAsync();
+        Assert.Contains(stale, s => s is { Path: "libs/sub", State: SubmoduleSyncState.OutOfSync, Depth: 0 } && s.Sha == f.SubC1);
 
         var result = await SubmoduleAutoUpdater.UpdateChangedAsync(repo, before, null);
 
         Assert.Equal(["libs/sub"], result.Updated);
         Assert.Equal(f.SubC2, (await f.Super.GitAsync("-C", "libs/sub", "rev-parse", "HEAD")).Trim());
         Assert.True(File.Exists(Path.Combine(f.Super.Path, "libs", "sub", "nested", "deep.txt")), "nested submodule should be checked out");
+        var updated = await repo.Submodules.GetRecursiveStatusAsync();
+        Assert.Contains(updated, s => s is { Path: "libs/sub", State: SubmoduleSyncState.Current, Branch: null } && s.Sha == f.SubC2); // update detaches HEAD
+        Assert.Contains(updated, s => s is { Path: "libs/sub/nested", State: SubmoduleSyncState.Current, Depth: 1 });
+    }
+
+    [Fact]
+    public async Task Status_ReportsBranchOfCheckedOutSubmodule()
+    {
+        await using var f = await CreateAsync();
+        await f.Super.GitAsync("-C", "libs/sub", "checkout", "-q", "-b", "work");
+        var repo = await f.Super.OpenAsync();
+
+        var status = await repo.Submodules.GetRecursiveStatusAsync();
+
+        Assert.Equal(["libs/sub", "libs/sub/nested"], status.Select(s => s.Path));
+        Assert.Equal(("work", SubmoduleSyncState.Current), (status[0].Branch, status[0].State));
     }
 
     [Fact]
@@ -122,6 +140,8 @@ public class SubmoduleTests
             await factory.CloneAsync(f.Super.Path, cloneDir, recurseSubmodules: false, null);
             await using var repo = await factory.OpenAsync(cloneDir);
             Assert.Contains((await repo.Read.GetSnapshotAsync()).Submodules, s => s.State.HasFlag(SubmoduleState.NotInitialized));
+            var uninitialized = await repo.Submodules.GetRecursiveStatusAsync(); // must not mistake the superproject for the submodule
+            Assert.Equal([("libs/sub", SubmoduleSyncState.NotInitialized)], uninitialized.Select(s => (s.Path, s.State)));
 
             var result = await SubmoduleAutoUpdater.InitializeMissingAsync(repo, null);
 
@@ -138,21 +158,22 @@ public class SubmoduleTests
     }
 
     [Fact]
-    public void ParsesRecursiveStatus()
+    public void ParsesGitlinksFromIndex()
     {
         const string output =
-            " 1111111111111111111111111111111111111111 libs/sub (heads/main)\n" +
-            "+2222222222222222222222222222222222222222 libs/sub/nested (v1.0-3-g2222222)\n" +
-            "-3333333333333333333333333333333333333333 tools/my tool\n" +
-            "U4444444444444444444444444444444444444444 vendor/x\n";
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 0\tapp.txt\0" +
+            "160000 1111111111111111111111111111111111111111 0\tlibs/sub\0" +
+            "160000 2222222222222222222222222222222222222222 1\tvendor/x\0" +
+            "160000 3333333333333333333333333333333333333333 2\tvendor/x\0" +
+            "160000 4444444444444444444444444444444444444444 3\tvendor/x\0" +
+            "160000 5555555555555555555555555555555555555555 0\ttools/my tool\0";
 
-        var entries = SubmoduleOperations.ParseStatus(output);
+        var links = SubmoduleOperations.ParseGitlinks(output);
 
-        Assert.Equal(4, entries.Count);
-        Assert.Equal(("libs/sub", SubmoduleSyncState.Current, 0, "heads/main"), (entries[0].Path, entries[0].State, entries[0].Depth, entries[0].Describe));
-        Assert.Equal(("libs/sub/nested", SubmoduleSyncState.OutOfSync, 1), (entries[1].Path, entries[1].State, entries[1].Depth));
-        Assert.Equal(("tools/my tool", SubmoduleSyncState.NotInitialized, (string?)null), (entries[2].Path, entries[2].State, entries[2].Describe));
-        Assert.Equal(SubmoduleSyncState.Conflicted, entries[3].State);
+        Assert.Equal(
+            [("libs/sub", false), ("vendor/x", true), ("tools/my tool", false)],
+            links.Select(l => (l.Path, l.Conflicted)));
+        Assert.Equal(new string('1', 40), links[0].Sha);
     }
 
     private static void TryDelete(string dir)

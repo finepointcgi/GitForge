@@ -11,6 +11,7 @@ public partial class MainWindow : Window
 {
     public MainWindow()
     {
+        StartupTrace.Mark("window: constructing");
         var services = new ServiceCollection();
         services.AddLogging(b => b.AddDebug().SetMinimumLevel(LogLevel.Information));
         services.AddWpfBlazorWebView();
@@ -23,17 +24,21 @@ public partial class MainWindow : Window
         services.AddSingleton(new StartupOptions(args.Length > 1 ? args[1] : null)); // GitForge.exe <repo-path>
 
         Resources.Add("services", services.BuildServiceProvider());
+        StartupTrace.Mark("window: services built");
         InitializeComponent();
+        StartupTrace.Mark("window: XAML loaded");
     }
 
     private void OnWebViewInitializing(object? sender, BlazorWebViewInitializingEventArgs e)
     {
+        StartupTrace.Mark("webview: creating");
         // Keep WebView2 state in the user profile (install folders may be read-only).
         e.UserDataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GitForge", "WebView2");
     }
 
     private void OnWebViewInitialized(object? sender, BlazorWebViewInitializedEventArgs e)
     {
+        StartupTrace.Mark("webview: ready");
         var settings = e.WebView.CoreWebView2.Settings;
         settings.IsStatusBarEnabled = false;
         settings.IsZoomControlEnabled = true;

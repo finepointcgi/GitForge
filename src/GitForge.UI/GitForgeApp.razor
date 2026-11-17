@@ -114,14 +114,18 @@
 
     protected override async Task OnInitializedAsync()
     {
+        StartupTrace.Mark("blazor: app initializing");
         W.Changed += OnChanged;
         Shortcuts.Command += OnCommand;
         await W.InitializeAsync();
         _theme = GitForgeTheme.Create(W.Settings.AccentColor);
         Shortcuts.VimNavigation = W.Settings.VimNavigation;
         SettingsStore.Changed += OnSettingsChanged;
+        StartupTrace.Mark("blazor: settings loaded");
 
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var version = await Cli.GetVersionAsync();
+        StartupTrace.Step("git --version", started);
         _gitVersionText = version is null
             ? "git not found — set its path in Settings"
             : version < GitForge.Git.GitEngineOptions.MinimumGitVersion ? $"git {version} (2.39+ required)" : $"git {version}";
@@ -130,9 +134,13 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
+        StartupTrace.Mark("blazor: first render");
         await Shortcuts.AttachAsync();
         await ApplyThemePreferenceAsync();
+        StartupTrace.Mark("blazor: shortcuts and theme ready");
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         await W.RestoreTabsAsync(Startup.OpenPath);
+        StartupTrace.Step("tabs restored", started);
     }
 
     private async Task ApplyThemePreferenceAsync()

@@ -314,7 +314,7 @@
                     byPath.TryGetValue(e.Path, out var info);
                     var dirty = info?.State.HasFlag(SubmoduleState.WorkDirDirty) == true;
                     return new SubmoduleRow(e.Path, e.Name, e.Depth, e.State, dirty,
-                        $"{e.Path} · {e.Sha[..Math.Min(8, e.Sha.Length)]}{(e.Describe is null ? null : $" ({e.Describe})")}{(info is null ? null : $" · {info.Url}")}");
+                        $"{e.Path} · {e.Sha[..Math.Min(8, e.Sha.Length)]}{(e.State == SubmoduleSyncState.NotInitialized ? null : e.Branch is null ? " (detached)" : $" on {e.Branch}")}{(info is null ? null : $" · {info.Url}")}");
                 }).ToList();
             }
 

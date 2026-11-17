@@ -44,8 +44,11 @@ public enum SubmoduleSyncState
     Conflicted,
 }
 
-/// <summary>One line of <c>git submodule status --recursive</c>; <see cref="Depth"/> is 0 for top-level submodules.</summary>
-public sealed record SubmoduleStatusEntry(string Path, string Sha, SubmoduleSyncState State, int Depth, string? Describe)
+/// <summary>
+/// One submodule, at any depth: <see cref="Sha"/> is its checked-out commit (or the recorded one when not initialized),
+/// <see cref="Depth"/> is 0 for top-level submodules, and <see cref="Branch"/> is null when detached.
+/// </summary>
+public sealed record SubmoduleStatusEntry(string Path, string Sha, SubmoduleSyncState State, int Depth, string? Branch)
 {
     public string Name => System.IO.Path.GetFileName(Path.TrimEnd('/'));
 }

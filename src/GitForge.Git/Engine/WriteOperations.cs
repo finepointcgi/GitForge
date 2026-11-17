@@ -475,11 +475,77 @@ internal sealed class SubmoduleOperations(RepoContext ctx) : ISubmoduleOperation
         return ctx.WriteAsync("submodule sync", args, cancellationToken);
     }
 
+    /// <summary>
+    /// Recursive submodule state without <c>git submodule status</c>, whose per-submodule <c>git describe</c> calls take
+    /// seconds on real projects. Compares each gitlink recorded in the index with the submodule's checked-out HEAD.
+    /// Paths are relative to the superproject root, and each submodule precedes its nested submodules.
+    /// </summary>
     public async Task<IReadOnlyList<SubmoduleStatusEntry>> GetRecursiveStatusAsync(CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(Path.Combine(ctx.WorkDir, ".gitmodules"))) return [];
-        var r = await ctx.RunAsync(["submodule", "status", "--recursive"], cancellationToken).ConfigureAwait(false);
-        return r.Succeeded ? ParseStatus(r.StandardOutput) : [];
+        var entries = new List<SubmoduleStatusEntry>();
+        await CollectStatusAsync(string.Empty, 0, entries, cancellationToken).ConfigureAwait(false);
+        return entries;
+    }
+
+    private async Task CollectStatusAsync(string dir, int depth, List<SubmoduleStatusEntry> into, CancellationToken ct)
+    {
+        if (!File.Exists(Path.Combine(ctx.WorkDir, dir, ".gitmodules"))) return;
+        var listing = await ctx.RunAsync(In(dir, "ls-files", "--stage", "-z"), ct).ConfigureAwait(false);
+        if (!listing.Succeeded) return;
+
+        // Siblings are independent: inspect them in parallel, then keep index order.
+        var subtrees = await Task.WhenAll(ParseGitlinks(listing.StandardOutput).Select(l => InspectAsync(dir, l, depth, ct))).ConfigureAwait(false);
+        foreach (var subtree in subtrees) into.AddRange(subtree);
+    }
+
+    private async Task<List<SubmoduleStatusEntry>> InspectAsync(string dir, Gitlink link, int depth, CancellationToken ct)
+    {
+        var path = dir.Length == 0 ? link.Path : $"{dir}/{link.Path}";
+        if (link.Conflicted) return [new SubmoduleStatusEntry(path, link.Sha, SubmoduleSyncState.Conflicted, depth, null)];
+
+        // Without its own .git, "git -C <path>" would resolve to the superproject, so check first.
+        var dotGit = Path.Combine(ctx.WorkDir, path, ".git");
+        string[] head = [];
+        if (File.Exists(dotGit) || Directory.Exists(dotGit))
+        {
+            var r = await ctx.RunAsync(In(path, "rev-parse", "HEAD", "--abbrev-ref", "HEAD"), ct, okCodes: [0, 128]).ConfigureAwait(false);
+            if (r.ExitCode == 0) head = r.StandardOutput.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        }
+
+        if (head.Length == 0 || head[0].Length < 40) return [new SubmoduleStatusEntry(path, link.Sha, SubmoduleSyncState.NotInitialized, depth, null)];
+
+        var branch = head.Length > 1 && head[1] != "HEAD" ? head[1] : null;
+        var state = string.Equals(head[0], link.Sha, StringComparison.OrdinalIgnoreCase) ? SubmoduleSyncState.Current : SubmoduleSyncState.OutOfSync;
+        var entries = new List<SubmoduleStatusEntry> { new(path, head[0], state, depth, branch) };
+        await CollectStatusAsync(path, depth + 1, entries, ct).ConfigureAwait(false);
+        return entries;
+    }
+
+    private static string[] In(string dir, params string[] args) => dir.Length == 0 ? args : ["-C", dir, .. args];
+
+    internal readonly record struct Gitlink(string Path, string Sha, bool Conflicted);
+
+    /// <summary>
+    /// Picks submodule entries (mode 160000) from <c>git ls-files --stage -z</c>: <c>&lt;mode&gt; &lt;sha&gt; &lt;stage&gt;\t&lt;path&gt;\0</c>.
+    /// A path with non-zero stages is in a merge conflict.
+    /// </summary>
+    internal static IReadOnlyList<Gitlink> ParseGitlinks(string output)
+    {
+        var links = new List<Gitlink>();
+        foreach (var record in output.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!record.StartsWith("160000 ", StringComparison.Ordinal)) continue;
+            var tab = record.IndexOf('\t', StringComparison.Ordinal);
+            var meta = tab > 0 ? record[..tab].Split(' ') : [];
+            if (meta.Length < 3) continue;
+            var path = record[(tab + 1)..];
+            var conflicted = meta[2] != "0";
+            var existing = links.FindIndex(l => l.Path == path);
+            if (existing >= 0) links[existing] = links[existing] with { Conflicted = true };
+            else links.Add(new Gitlink(path, meta[1], conflicted));
+        }
+
+        return links;
     }
 
     private Task<GitResult> UpdateCoreAsync(IReadOnlyCollection<string>? paths, bool init, bool recursive, IProgress<string>? progress, CancellationToken ct)
@@ -494,46 +560,5 @@ internal sealed class SubmoduleOperations(RepoContext ctx) : ISubmoduleOperation
         }
 
         return ctx.WriteAsync("submodule update", args, ct, progress: progress);
-    }
-
-    /// <summary>
-    /// Parses <c>git submodule status --recursive</c>: <c>[ +-U]&lt;sha&gt; &lt;path&gt;[ (&lt;describe&gt;)]</c>, with nested
-    /// paths relative to the superproject root.
-    /// </summary>
-    internal static IReadOnlyList<SubmoduleStatusEntry> ParseStatus(string output)
-    {
-        var raw = new List<(string Path, string Sha, SubmoduleSyncState State, string? Describe)>();
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var l = line.TrimEnd('\r');
-            if (l.Length < 42) continue;
-            var state = l[0] switch
-            {
-                '-' => SubmoduleSyncState.NotInitialized,
-                '+' => SubmoduleSyncState.OutOfSync,
-                'U' => SubmoduleSyncState.Conflicted,
-                _ => SubmoduleSyncState.Current,
-            };
-            var rest = l[1..];
-            var space = rest.IndexOf(' ', StringComparison.Ordinal);
-            if (space < 7) continue;
-            var sha = rest[..space];
-            var pathPart = rest[(space + 1)..];
-            string? describe = null;
-            var paren = pathPart.LastIndexOf(" (", StringComparison.Ordinal);
-            if (paren > 0 && pathPart.EndsWith(')'))
-            {
-                describe = pathPart[(paren + 2)..^1];
-                pathPart = pathPart[..paren];
-            }
-
-            raw.Add((pathPart, sha, state, describe));
-        }
-
-        return raw.Select(e => new SubmoduleStatusEntry(
-                e.Path, e.Sha, e.State,
-                raw.Count(o => e.Path.StartsWith(o.Path + "/", StringComparison.Ordinal)),
-                e.Describe))
-            .ToList();
     }
 }

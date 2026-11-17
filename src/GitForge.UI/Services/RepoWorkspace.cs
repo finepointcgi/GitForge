@@ -4,6 +4,7 @@ using GitForge.Core.Models;
 using GitForge.Git;
 using GitForge.Git.Submodules;
 using GitForge.Git.Undo;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using MudBlazor;
 
@@ -165,9 +166,11 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
                 return;
             }
 
+            var started = Stopwatch.GetTimestamp();
             var patterns = await session.Repo.Lfs.GetPatternsAsync();
             var files = await session.Repo.Lfs.GetFilesAsync();
             var locks = includeLocks ? await session.Repo.Lfs.GetLocksAsync() : session.Lfs.Locks;
+            StartupTrace.Step(includeLocks ? "lfs: files and server locks" : "lfs: files", started);
             session.Lfs = new LfsState(true, patterns, files, locks);
             session.LfsPaths = files.Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
             session.LocksByPath = locks.Locks.GroupBy(l => l.Path, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
@@ -388,7 +391,9 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
                 return existing;
             }
 
+            var opening = Stopwatch.GetTimestamp();
             var repo = await _factory.OpenAsync(root);
+            StartupTrace.Step($"repo: opened {repo.Name}", opening);
             var session = new RepoSession(repo) { StaleKinds = RepositoryChangeKind.All };
             repo.Changed += OnRepositoryChanged;
             session.Undo.Changed += (_, _) =>
@@ -419,13 +424,17 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
         var stale = session.StaleKinds;
         session.StaleKinds = RepositoryChangeKind.None;
+        var refreshing = Stopwatch.GetTimestamp();
         if (stale != RepositoryChangeKind.None) await RefreshSessionAsync(session, stale);
+        StartupTrace.Step("repo: refreshed on activation", refreshing);
 
         if (first)
         {
             if (HasWip) SelectWip();
             else if (Snapshot?.HeadSha is { } head) SelectCommit(head);
+            var checking = Stopwatch.GetTimestamp();
             await CheckSubmodulesOnOpenAsync();
+            StartupTrace.Step("repo: submodule check on open", checking);
             _ = RefreshLfsAsync(session, includeLocks: true); // network call for locks: don't block the tab
         }
 
@@ -499,13 +508,18 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
                 var refs = (k & (RepositoryChangeKind.Refs | RepositoryChangeKind.Config)) != 0;
                 if (refs)
                 {
+                    var step = Stopwatch.GetTimestamp();
                     var snapshot = await repo.Read.GetSnapshotAsync();
                     session.Snapshot = snapshot;
                     session.RefIndex = snapshot.BuildRefIndex();
-                    session.SubmoduleStatus = snapshot.Submodules.Count > 0 ? await repo.Submodules.GetRecursiveStatusAsync() : [];
+                    StartupTrace.Step("repo: snapshot", step);
+                    if (snapshot.Submodules.Count == 0) session.SubmoduleStatus = [];
+                    else _ = RefreshSubmoduleStatusAsync(session);
                 }
 
+                var statusStep = Stopwatch.GetTimestamp();
                 session.Status = await repo.Read.GetStatusAsync();
+                StartupTrace.Step("repo: working tree status", statusStep);
                 if (session.WipSelected && session.Status.IsClean && session.Snapshot?.HeadSha is { } head)
                 {
                     session.WipSelected = false;
@@ -534,6 +548,28 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         if (again) await RefreshSessionAsync(session, RepositoryChangeKind.None);
     }
 
+    /// <summary>
+    /// Recursive submodule state only feeds the sidebar, so it loads in the background and never holds up status or
+    /// history. When refreshes overlap, only the newest result is applied.
+    /// </summary>
+    private async Task RefreshSubmoduleStatusAsync(RepoSession session)
+    {
+        var version = Interlocked.Increment(ref session.SubmoduleStatusVersion);
+        try
+        {
+            var started = Stopwatch.GetTimestamp();
+            var status = await session.Repo.Submodules.GetRecursiveStatusAsync();
+            StartupTrace.Step($"repo: submodule status, {status.Count} submodules (background)", started);
+            if (Volatile.Read(ref session.SubmoduleStatusVersion) != version || !_sessions.Contains(session)) return;
+            session.SubmoduleStatus = status;
+            if (session == _active) Notify();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not ObjectDisposedException)
+        {
+            LogRefreshFailed(_log, ex);
+        }
+    }
+
     /// <summary>Re-streams the active tab's history (after hide/solo changes).</summary>
     public Task LoadHistoryAsync() => _active is null ? Task.CompletedTask : LoadHistoryAsync(_active);
 
@@ -546,6 +582,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         var builder = new CommitGraphBuilder(GitForgeTheme.LaneColors.Length);
         var query = BuildHistoryQuery(session);
         session.HistoryLoading = true;
+        var started = Stopwatch.GetTimestamp();
 
         try
         {
@@ -557,6 +594,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
                     rows.Add(builder.Add(commit));
                     if (rows.Count >= nextPublish)
                     {
+                        if (nextPublish == FirstHistoryBatch) StartupTrace.Step("history: first rows shown", started);
                         Publish(session, rows, cts);
                         nextPublish = rows.Count + HistoryBatch;
                     }
@@ -578,6 +616,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
         if (cts.IsCancellationRequested) return;
         session.HistoryLoading = false;
+        StartupTrace.Step($"history: {rows.Count} commits loaded", started);
         Publish(session, rows, cts);
         if (session == _active) Notify();
     }
