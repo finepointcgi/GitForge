@@ -129,6 +129,17 @@ public interface IHistoryOperations
 
 public interface ISubmoduleOperations
 {
+    /// <summary><c>git submodule update [--init] [--recursive]</c> for every submodule.</summary>
     Task UpdateAsync(bool init, bool recursive, IProgress<string>? progress, CancellationToken cancellationToken = default);
+
+    /// <summary>Same, limited to the given submodule paths (nested submodules follow with <paramref name="recursive"/>).</summary>
+    Task UpdateAsync(IReadOnlyCollection<string> paths, bool init, bool recursive, IProgress<string>? progress, CancellationToken cancellationToken = default);
+
+    /// <summary><c>git submodule sync</c>: copies URL changes from .gitmodules into the submodules' config.</summary>
     Task SyncAsync(bool recursive, CancellationToken cancellationToken = default);
+
+    Task SyncAsync(IReadOnlyCollection<string> paths, bool recursive, CancellationToken cancellationToken = default);
+
+    /// <summary>Nested status of every submodule (<c>git submodule status --recursive</c>). Read-only.</summary>
+    Task<IReadOnlyList<SubmoduleStatusEntry>> GetRecursiveStatusAsync(CancellationToken cancellationToken = default);
 }

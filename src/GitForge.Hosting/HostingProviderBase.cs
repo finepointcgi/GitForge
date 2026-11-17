@@ -12,7 +12,7 @@ public sealed class HostingApiException(HttpStatusCode status, string message) :
     public HttpStatusCode Status { get; } = status;
 }
 
-/// <summary>Shared HTTP plumbing: HTTPS enforcement, auth headers, JSON, and pagination.</summary>
+/// <summary>Shared HTTP plumbing: transport policy (HTTPS, or HTTP for explicitly http:// accounts), auth headers, JSON, and pagination.</summary>
 public abstract class HostingProviderBase(IHttpClientFactory httpClientFactory) : IHostingProvider
 {
     public const string HttpClientName = "gitforge-hosting";
@@ -29,7 +29,10 @@ public abstract class HostingProviderBase(IHttpClientFactory httpClientFactory) 
 
     protected async Task<(JsonDocument Json, HttpResponseMessage Response)> GetAsync(Uri uri, HostingAccount account, string token, CancellationToken ct)
     {
-        if (uri.Scheme != Uri.UriSchemeHttps) throw new InvalidOperationException($"Refusing non-HTTPS API call to {uri.Host}.");
+        if (!HostingDefaults.IsRequestAllowed(uri, account))
+        {
+            throw new InvalidOperationException($"Refusing insecure API call to {uri.Host}: plain HTTP is only used for accounts configured with an http:// URL.");
+        }
 
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         request.Headers.UserAgent.ParseAdd(UserAgent);

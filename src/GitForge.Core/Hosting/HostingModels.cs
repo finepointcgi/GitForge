@@ -32,6 +32,9 @@ public sealed record HostingAccount
 
     public bool IsSelfHosted { get; init; }
 
+    /// <summary>True when the API is reached over plain HTTP: the token travels unencrypted.</summary>
+    public bool IsInsecureHttp => ApiBaseUrl.Scheme == Uri.UriSchemeHttp;
+
     public string SecretKey => $"account:{Id:N}";
 }
 

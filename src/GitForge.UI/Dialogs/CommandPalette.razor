@@ -70,6 +70,7 @@
                 new("New branch…", "Branch", Icons.Material.Outlined.CallSplit, "Ctrl+B", Cmd("branch.new")),
                 new("Stash changes…", "Stash", Icons.Material.Outlined.Inventory2, "Ctrl+Shift+S", Cmd("stash.save")),
                 new("Pop latest stash", "Stash", Icons.Material.Outlined.Unarchive, null, W.PopStashAsync),
+                new("Update submodules (recursive)", "Submodules", Icons.Material.Outlined.Extension, null, W.UpdateSubmodulesAsync),
                 new(W.Undo.CanUndo ? $"Undo {W.Undo.UndoDescription}" : "Undo", "Edit", Icons.Material.Outlined.Undo, "Ctrl+Z", Cmd("edit.undo")),
                 new(W.Undo.CanRedo ? $"Redo {W.Undo.RedoDescription}" : "Redo", "Edit", Icons.Material.Outlined.Redo, "Ctrl+Y", Cmd("edit.redo")),
                 new("Go to WIP (stage and commit)", "View", Icons.Material.Outlined.EditNote, "Ctrl+1", Cmd("view.status")),

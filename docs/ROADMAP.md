@@ -32,7 +32,7 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 | Safety | Single-level undo/redo: commit, checkout, branch create/delete, reset, discard (tracked and untracked) | ✅ |
 | Platform | `GitForge.exe <path>` opens a repository; `GITFORGE_SETTINGS` selects an alternate settings file | ✅ |
 | Console | Integrated git command console bound to the active repository | 🟡 (argv console; full PTY terminal in Phase 3) |
-| Submodules | List with state, update `--init --recursive`, open submodule | 🟡 (recursive status tree in Phase 3) |
+| Submodules | Recursive status tree; automatic sync + `update --init --recursive` after HEAD moves (changed pins only, dirty submodules skipped); init on open; manual update (all or one) | ✅ |
 
 ## Phase 2 — Power-user workflow (target: +6 weeks)
 
@@ -47,7 +47,7 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 ## Phase 3 — Enterprise scale (target: +6 weeks)
 
 - ⬜ Git LFS: tracked-file indicators, lock/unlock, locked-by badges (`git lfs locks --json`).
-- ⬜ Submodules: recursive status tree, batch fetch/sync, detached-HEAD warnings.
+- ⬜ Submodules: detached-HEAD warnings inside submodules; optional `--remote` tracking updates.
 - ⬜ Huge monorepos: `git status --porcelain=v2 -z` path with fsmonitor/untracked cache; sparse checkout and partial clone support; history paging beyond 1M commits.
 - ⬜ OAuth device-flow sign-in (GitHub, GitLab) and Microsoft Entra ID for Azure DevOps, alongside PATs.
 - ⬜ Bitbucket Data Center REST API (`/rest/api/1.0`).

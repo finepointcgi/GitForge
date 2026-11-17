@@ -7,16 +7,18 @@ namespace GitForge.Hosting;
 /// <summary>Builds correctly-shaped account records for cloud and self-hosted instances.</summary>
 public static class HostingDefaults
 {
-    /// <param name="selfHostedUrl">Base web URL for self-hosted instances (https only); null for the public cloud.</param>
+    /// <param name="selfHostedUrl">
+    /// Base web URL for self-hosted instances (https:// or http://); null for the public cloud, which is always HTTPS.
+    /// </param>
     /// <param name="organization">Azure DevOps organization (cloud) — required for Azure DevOps Services.</param>
     public static HostingAccount CreateAccount(HostingProviderKind kind, string displayName, string? username, string? selfHostedUrl = null, string? organization = null)
     {
         Uri? custom = null;
         if (!string.IsNullOrWhiteSpace(selfHostedUrl))
         {
-            if (!Uri.TryCreate(selfHostedUrl.Trim().TrimEnd('/'), UriKind.Absolute, out custom) || custom.Scheme != Uri.UriSchemeHttps)
+            if (!Uri.TryCreate(selfHostedUrl.Trim().TrimEnd('/'), UriKind.Absolute, out custom) || !IsWebScheme(custom))
             {
-                throw new ArgumentException("Self-hosted URL must be an absolute https:// URL.", nameof(selfHostedUrl));
+                throw new ArgumentException("Self-hosted URL must be an absolute http:// or https:// URL.", nameof(selfHostedUrl));
             }
         }
 
@@ -46,6 +48,21 @@ public static class HostingDefaults
 
     // Uri.ToString() appends '/' to an empty path; strip it before composing API roots.
     private static string Root(Uri u) => u.ToString().TrimEnd('/');
+
+    internal static bool IsWebScheme(Uri u) => u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp;
+
+    /// <summary>
+    /// Request policy: HTTPS always; plain HTTP only when the account itself was configured with an http:// API root,
+    /// and only to that same host and port (no scheme downgrade or cross-host hop from pagination links).
+    /// </summary>
+    internal static bool IsRequestAllowed(Uri request, HostingAccount account)
+    {
+        if (request.Scheme == Uri.UriSchemeHttps) return true;
+        return request.Scheme == Uri.UriSchemeHttp
+               && account.IsInsecureHttp
+               && string.Equals(request.Host, account.ApiBaseUrl.Host, StringComparison.OrdinalIgnoreCase)
+               && request.Port == account.ApiBaseUrl.Port;
+    }
 
     private static (Uri, Uri) AzureCloud(string? organization)
     {
@@ -79,7 +96,7 @@ public sealed class AccountService : IAccountService
     public async Task<HostingUser> AddAsync(HostingAccount account, string token, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
-        if (account.ApiBaseUrl.Scheme != Uri.UriSchemeHttps) throw new ArgumentException("Only HTTPS endpoints are allowed.", nameof(account));
+        if (!HostingDefaults.IsWebScheme(account.ApiBaseUrl)) throw new ArgumentException("Only http:// and https:// endpoints are supported.", nameof(account));
         if (!_secrets.IsSupported) throw new PlatformNotSupportedException($"Secure token storage is unavailable ({_secrets.BackendName}).");
 
         var user = await GetProvider(account.Provider).ValidateAsync(account, token.Trim(), cancellationToken).ConfigureAwait(false);

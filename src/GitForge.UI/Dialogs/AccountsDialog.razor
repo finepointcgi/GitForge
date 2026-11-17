@@ -16,6 +16,10 @@
                         <MudIcon Icon="@(a.Provider == HostingProviderKind.GitHub ? Icons.Custom.Brands.GitHub : Icons.Material.Outlined.Cloud)" Size="Size.Small" />
                         <span class="gf-filename">@a.DisplayName</span>
                         <span class="gf-dim gf-small gf-grow gf-ellipsis">@a.Provider · @a.WebBaseUrl.Host @(a.Username is null ? null : $"· {a.Username}")</span>
+                        @if (a.IsInsecureHttp)
+                        {
+                            <span class="gf-chip warn" title="This account uses plain HTTP: its token is sent unencrypted.">HTTP</span>
+                        }
                         <button class="gf-link-button danger" @onclick="@(() => Remove(a))">Remove</button>
                     </div>
                 }
@@ -34,7 +38,13 @@
             <MudCheckBox T="bool" @bind-Value="_selfHosted" Label="Self-hosted / enterprise instance" Size="Size.Small" Dense="true" />
             @if (_selfHosted)
             {
-                <MudTextField T="string" @bind-Value="_url" Label="Base URL (https://…)" Placeholder="@UrlHint" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField T="string" @bind-Value="_url" Label="Base URL (https:// or http://)" Placeholder="@UrlHint" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                @if (IsHttpUrl)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined">
+                        Plain HTTP sends your access token and all API data unencrypted, so anyone on the network path can read or reuse the token. Use it only on a trusted, isolated network, and prefer HTTPS.
+                    </MudAlert>
+                }
             }
             @if (_kind == HostingProviderKind.AzureDevOps && !_selfHosted)
             {
@@ -91,8 +101,19 @@
         _ => "PAT with Code (Read) scope.",
     };
 
+    private bool IsHttpUrl => _selfHosted && _url?.Trim().StartsWith("http://", StringComparison.OrdinalIgnoreCase) == true;
+
     private async Task Add()
     {
+        if (IsHttpUrl &&
+            await Dialogs.ShowMessageBoxAsync(
+                "Use unencrypted HTTP?",
+                $"{_url!.Trim()} uses plain HTTP. Your access token will be sent unencrypted with every request. Continue only if this server is on a trusted, isolated network.",
+                yesText: "Use HTTP", cancelText: "Cancel") != true)
+        {
+            return;
+        }
+
         _saving = true;
         try
         {

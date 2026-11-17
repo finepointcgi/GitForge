@@ -2,6 +2,7 @@ using GitForge.Core.Abstractions;
 using GitForge.Core.Graph;
 using GitForge.Core.Models;
 using GitForge.Git;
+using GitForge.Git.Submodules;
 using GitForge.Git.Undo;
 using Microsoft.Extensions.Logging;
 using MudBlazor;
@@ -65,6 +66,9 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
     public IGitRepository? Repo { get; private set; }
     public RepositorySnapshot? Snapshot { get; private set; }
+
+    /// <summary>Nested submodule status (<c>git submodule status --recursive</c>), refreshed with refs.</summary>
+    public IReadOnlyList<SubmoduleStatusEntry> SubmoduleStatus { get; private set; } = [];
     public IReadOnlyDictionary<string, IReadOnlyList<RefLabel>> RefIndex { get; private set; } = new Dictionary<string, IReadOnlyList<RefLabel>>();
     public WorkingCopyStatus Status { get; private set; } = WorkingCopyStatus.Empty;
     public AppendOnlyList<GraphRow> Rows { get; private set; } = new();
@@ -175,6 +179,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
             await RefreshAsync(RepositoryChangeKind.All);
             if (HasWip) SelectWip();
             else if (Snapshot?.HeadSha is { } head) SelectCommit(head);
+            await CheckSubmodulesOnOpenAsync();
             StartAutoFetch();
         }
         catch (Exception ex)
@@ -195,6 +200,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
         Repo = null;
         Snapshot = null;
+        SubmoduleStatus = [];
         Status = WorkingCopyStatus.Empty;
         Rows = new AppendOnlyList<GraphRow>();
         SelectedCommitSha = null;
@@ -232,6 +238,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
                 {
                     Snapshot = await repo.Read.GetSnapshotAsync();
                     RefIndex = Snapshot.BuildRefIndex();
+                    SubmoduleStatus = Snapshot.Submodules.Count > 0 ? await repo.Submodules.GetRecursiveStatusAsync() : [];
                 }
 
                 Status = await repo.Read.GetStatusAsync();
@@ -351,6 +358,10 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         var repo = Repo;
         if (repo is null) return false;
 
+        // Capture submodule pins so submodules can follow any HEAD move (checkout, pull, merge, rebase, reset, undo…).
+        var beforeHead = Snapshot?.HeadSha;
+        var beforePins = Settings.AutoUpdateSubmodules && Snapshot is { } snap ? SubmoduleAutoUpdater.Capture(snap) : null;
+
         BusyText = label;
         ProgressText = null;
         Notify();
@@ -364,6 +375,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         {
             await Task.Run(() => operation(repo, progress));
             if (success is not null) _snackbar.Add(success, Severity.Success);
+            if (beforePins is not null) await FollowHeadWithSubmodulesAsync(repo, beforeHead, beforePins, progress);
             return true;
         }
         catch (Exception ex)
@@ -376,6 +388,84 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
             BusyText = null;
             ProgressText = null;
             await RefreshAsync(RepositoryChangeKind.All);
+        }
+    }
+
+    /// <summary>
+    /// When HEAD moved, recursively updates submodules whose recorded commit changed (or that are new).
+    /// A failure here is reported separately: the user's main operation already succeeded.
+    /// </summary>
+    private async Task FollowHeadWithSubmodulesAsync(IGitRepository repo, string? beforeHead, IReadOnlyDictionary<string, string?> before, IProgress<string> progress)
+    {
+        try
+        {
+            var head = (await repo.QueryAsync(["rev-parse", "--verify", "--quiet", "HEAD"])).StandardOutput.Trim();
+            if (head.Length == 0 || head == beforeHead) return;
+            if (before.Count == 0 && !File.Exists(Path.Combine(repo.WorkingDirectory, ".gitmodules"))) return;
+
+            BusyText = "Updating submodules (recursive)";
+            ProgressText = null;
+            Notify();
+            ReportSubmoduleUpdate(await Task.Run(() => SubmoduleAutoUpdater.UpdateChangedAsync(repo, before, progress)));
+        }
+        catch (Exception ex)
+        {
+            Error("Submodule update", ex);
+        }
+    }
+
+    /// <summary>Explicit "Update submodules": every submodule to its recorded commit, recursively; dirty ones are skipped.</summary>
+    public Task UpdateSubmodulesAsync() =>
+        RunAsync("Updating submodules (recursive)", async (r, p) =>
+        {
+            var result = await SubmoduleAutoUpdater.UpdateAllAsync(r, p);
+            ReportSubmoduleUpdate(result);
+            if (result.IsEmpty) Info("No submodules to update.");
+        });
+
+    /// <summary>Updates one top-level submodule (and its nested submodules).</summary>
+    public Task UpdateSubmoduleAsync(string path) =>
+        RunAsync($"Updating {path}", (r, p) => r.Submodules.UpdateAsync([path], init: true, recursive: true, p), $"Updated {path}");
+
+    private async Task CheckSubmodulesOnOpenAsync()
+    {
+        if (Repo is null || Snapshot is not { Submodules.Count: > 0 } s) return;
+
+        // Initializing is always safe (nothing is checked out yet), so do it without asking.
+        if (Settings.AutoUpdateSubmodules && s.Submodules.Any(m => m.HeadSha is not null && m.State.HasFlag(SubmoduleState.NotInitialized)))
+        {
+            await RunAsync("Initializing submodules (recursive)", async (r, p) => ReportSubmoduleUpdate(await SubmoduleAutoUpdater.InitializeMissingAsync(r, p)));
+        }
+
+        // Moving an existing checkout could surprise someone working inside a submodule, so offer it instead.
+        var outOfSync = Snapshot is { } now ? SubmoduleAutoUpdater.OutOfSync(now) : [];
+        if (outOfSync.Count > 0)
+        {
+            _snackbar.Add(
+                $"{outOfSync.Count} submodule{(outOfSync.Count == 1 ? " is" : "s are")} not at the commit this branch records ({string.Join(", ", outOfSync.Take(3))}).",
+                Severity.Warning,
+                o =>
+                {
+                    o.Action = "Update";
+                    o.ActionColor = Color.Primary;
+                    o.VisibleStateDuration = 15000;
+                    o.OnClick = _ => UpdateSubmodulesAsync();
+                });
+        }
+    }
+
+    private void ReportSubmoduleUpdate(SubmoduleUpdateResult result)
+    {
+        if (result.Updated.Count > 0)
+        {
+            Info($"Updated submodule{(result.Updated.Count == 1 ? string.Empty : "s")} (recursive): {string.Join(", ", result.Updated.Take(5))}{(result.Updated.Count > 5 ? "…" : string.Empty)}", Severity.Success);
+        }
+
+        if (result.SkippedDirty.Count > 0)
+        {
+            _snackbar.Add(
+                $"Skipped submodule{(result.SkippedDirty.Count == 1 ? string.Empty : "s")} with local changes: {string.Join(", ", result.SkippedDirty)}. Commit or stash inside them, then update.",
+                Severity.Warning, o => o.VisibleStateDuration = 12000);
         }
     }
 

@@ -108,6 +108,31 @@ public class HostingDefaultsTests
     }
 
     [Fact]
-    public void RejectsPlainHttp() =>
-        Assert.Throws<ArgumentException>(() => HostingDefaults.CreateAccount(HostingProviderKind.GitLab, "x", null, "http://gitlab.local"));
+    public void AcceptsPlainHttpForSelfHosted()
+    {
+        var a = HostingDefaults.CreateAccount(HostingProviderKind.GitLab, "x", null, "http://gitlab.local:8080");
+        Assert.Equal("http://gitlab.local:8080/api/v4", a.ApiBaseUrl.ToString().TrimEnd('/'));
+        Assert.True(a.IsInsecureHttp);
+        Assert.False(HostingDefaults.CreateAccount(HostingProviderKind.GitLab, "x", null, "https://gitlab.local").IsInsecureHttp);
+    }
+
+    [Theory]
+    [InlineData("ftp://gitlab.local")]
+    [InlineData("file:///c:/repos")]
+    [InlineData("gitlab.local")]
+    public void RejectsNonWebSchemes(string url) =>
+        Assert.Throws<ArgumentException>(() => HostingDefaults.CreateAccount(HostingProviderKind.GitLab, "x", null, url));
+
+    [Fact]
+    public void RequestPolicy_AllowsHttpOnlyForHttpAccountsOnTheSameHostAndPort()
+    {
+        var http = HostingDefaults.CreateAccount(HostingProviderKind.GitLab, "x", null, "http://gitlab.local:8080");
+        var https = HostingDefaults.CreateAccount(HostingProviderKind.GitLab, "x", null, "https://gitlab.local");
+
+        Assert.True(HostingDefaults.IsRequestAllowed(new Uri("http://gitlab.local:8080/api/v4/user"), http));
+        Assert.True(HostingDefaults.IsRequestAllowed(new Uri("https://gitlab.local/api/v4/user"), http)); // upgrading is always fine
+        Assert.False(HostingDefaults.IsRequestAllowed(new Uri("http://evil.example/api/v4/user"), http)); // no cross-host HTTP hop
+        Assert.False(HostingDefaults.IsRequestAllowed(new Uri("http://gitlab.local:9090/api/v4/user"), http)); // nor another port
+        Assert.False(HostingDefaults.IsRequestAllowed(new Uri("http://gitlab.local/api/v4/user"), https)); // HTTPS accounts never downgrade
+    }
 }

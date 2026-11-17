@@ -376,14 +376,84 @@ internal sealed class HistoryOperations(RepoContext ctx) : IHistoryOperations
 
 internal sealed class SubmoduleOperations(RepoContext ctx) : ISubmoduleOperations
 {
-    public Task UpdateAsync(bool init, bool recursive, IProgress<string>? progress, CancellationToken cancellationToken = default)
-    {
-        var args = new List<string> { "submodule", "update", "--progress" };
-        if (init) args.Add("--init");
-        if (recursive) args.Add("--recursive");
-        return ctx.WriteAsync("submodule update", args, cancellationToken, progress: progress);
-    }
+    public Task UpdateAsync(bool init, bool recursive, IProgress<string>? progress, CancellationToken cancellationToken = default) =>
+        UpdateCoreAsync(null, init, recursive, progress, cancellationToken);
+
+    public Task UpdateAsync(IReadOnlyCollection<string> paths, bool init, bool recursive, IProgress<string>? progress, CancellationToken cancellationToken = default) =>
+        paths.Count == 0 ? Task.CompletedTask : UpdateCoreAsync(paths, init, recursive, progress, cancellationToken);
 
     public Task SyncAsync(bool recursive, CancellationToken cancellationToken = default) =>
         ctx.WriteAsync("submodule sync", recursive ? ["submodule", "sync", "--recursive"] : ["submodule", "sync"], cancellationToken);
+
+    public Task SyncAsync(IReadOnlyCollection<string> paths, bool recursive, CancellationToken cancellationToken = default)
+    {
+        if (paths.Count == 0) return Task.CompletedTask;
+        var args = new List<string> { "--literal-pathspecs", "submodule", "sync" };
+        if (recursive) args.Add("--recursive");
+        args.Add("--");
+        args.AddRange(paths);
+        return ctx.WriteAsync("submodule sync", args, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<SubmoduleStatusEntry>> GetRecursiveStatusAsync(CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(Path.Combine(ctx.WorkDir, ".gitmodules"))) return [];
+        var r = await ctx.RunAsync(["submodule", "status", "--recursive"], cancellationToken).ConfigureAwait(false);
+        return r.Succeeded ? ParseStatus(r.StandardOutput) : [];
+    }
+
+    private Task<GitResult> UpdateCoreAsync(IReadOnlyCollection<string>? paths, bool init, bool recursive, IProgress<string>? progress, CancellationToken ct)
+    {
+        var args = new List<string> { "--literal-pathspecs", "submodule", "update", "--progress" };
+        if (init) args.Add("--init");
+        if (recursive) args.Add("--recursive");
+        if (paths is not null)
+        {
+            args.Add("--");
+            args.AddRange(paths);
+        }
+
+        return ctx.WriteAsync("submodule update", args, ct, progress: progress);
+    }
+
+    /// <summary>
+    /// Parses <c>git submodule status --recursive</c>: <c>[ +-U]&lt;sha&gt; &lt;path&gt;[ (&lt;describe&gt;)]</c>, with nested
+    /// paths relative to the superproject root.
+    /// </summary>
+    internal static IReadOnlyList<SubmoduleStatusEntry> ParseStatus(string output)
+    {
+        var raw = new List<(string Path, string Sha, SubmoduleSyncState State, string? Describe)>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var l = line.TrimEnd('\r');
+            if (l.Length < 42) continue;
+            var state = l[0] switch
+            {
+                '-' => SubmoduleSyncState.NotInitialized,
+                '+' => SubmoduleSyncState.OutOfSync,
+                'U' => SubmoduleSyncState.Conflicted,
+                _ => SubmoduleSyncState.Current,
+            };
+            var rest = l[1..];
+            var space = rest.IndexOf(' ', StringComparison.Ordinal);
+            if (space < 7) continue;
+            var sha = rest[..space];
+            var pathPart = rest[(space + 1)..];
+            string? describe = null;
+            var paren = pathPart.LastIndexOf(" (", StringComparison.Ordinal);
+            if (paren > 0 && pathPart.EndsWith(')'))
+            {
+                describe = pathPart[(paren + 2)..^1];
+                pathPart = pathPart[..paren];
+            }
+
+            raw.Add((pathPart, sha, state, describe));
+        }
+
+        return raw.Select(e => new SubmoduleStatusEntry(
+                e.Path, e.Sha, e.State,
+                raw.Count(o => e.Path.StartsWith(o.Path + "/", StringComparison.Ordinal)),
+                e.Describe))
+            .ToList();
+    }
 }

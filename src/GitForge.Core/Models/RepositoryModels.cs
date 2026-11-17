@@ -36,6 +36,27 @@ public enum SubmoduleState
 
 public sealed record SubmoduleInfo(string Name, string Path, string Url, string? HeadSha, string? WorkDirSha, SubmoduleState State);
 
+public enum SubmoduleSyncState
+{
+    Current,
+    NotInitialized,
+    OutOfSync,
+    Conflicted,
+}
+
+/// <summary>One line of <c>git submodule status --recursive</c>; <see cref="Depth"/> is 0 for top-level submodules.</summary>
+public sealed record SubmoduleStatusEntry(string Path, string Sha, SubmoduleSyncState State, int Depth, string? Describe)
+{
+    public string Name => System.IO.Path.GetFileName(Path.TrimEnd('/'));
+}
+
+/// <summary>Outcome of an automatic submodule update.</summary>
+public sealed record SubmoduleUpdateResult(IReadOnlyList<string> Updated, IReadOnlyList<string> SkippedDirty)
+{
+    public static readonly SubmoduleUpdateResult None = new([], []);
+    public bool IsEmpty => Updated.Count == 0 && SkippedDirty.Count == 0;
+}
+
 /// <summary>Operation the repository is in the middle of (drives the conflict/continue banner).</summary>
 public enum RepositoryOperation
 {

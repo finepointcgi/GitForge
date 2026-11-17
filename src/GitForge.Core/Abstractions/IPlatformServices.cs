@@ -30,6 +30,9 @@ public sealed record AppSettings
     public string? ExternalMergeTool { get; init; }
     public string? ExternalDiffTool { get; init; }
     public bool FetchOnOpen { get; init; } = true;
+
+    /// <summary>Keep submodules in step with HEAD automatically (recursive init/sync/update; dirty submodules are skipped).</summary>
+    public bool AutoUpdateSubmodules { get; init; } = true;
     public int AutoFetchMinutes { get; init; } = 10;
     public bool SideBySideDiff { get; init; }
     public bool ShowAuthorColumn { get; init; } = true;

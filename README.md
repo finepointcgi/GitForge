@@ -7,9 +7,10 @@ A fast, keyboard-first Git client for Windows, built with C#/.NET 10, Blazor, an
 - **High-velocity staging:** hunk- and line-level stage, unstage, and discard from the keyboard.
 - **Undo/redo (Ctrl+Z / Ctrl+Y):** commit, checkout, branch create/delete, reset, and discard (including untracked files).
 - **Command palette (Ctrl+P):** fuzzy search across actions, branches, and recent repositories; hide or solo branches in the graph.
+- **Automatic recursive submodules:** after checkout, pull, merge, rebase, reset, or undo, submodules whose recorded commit changed are synced and updated (`--init --recursive`); submodules with local changes are never overwritten. Uninitialized submodules are initialized on open. Toggle in **Settings**.
 - **Advanced Git:** visual interactive rebase, reflog recovery, conflict tools, stash manager, submodules.
 - **Multi-account hosting:** tokens in Windows Credential Manager, repository browser, pull request list.
-- **Secure by default:** no telemetry, HTTPS-only APIs, no plaintext secrets, hooks and signing honored.
+- **Secure by default:** no telemetry, HTTPS APIs by default (plain HTTP only for self-hosted servers you explicitly configure that way), no plaintext secrets on disk, hooks and signing honored.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and data models, and [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan.
 
@@ -82,5 +83,7 @@ Open **Accounts** in the toolbar, choose a provider, and paste a personal access
 | GitLab / self-managed | PAT with `read_api` | API root is `/api/v4`. |
 | Bitbucket Cloud | Atlassian API token + account email, or an access token (leave email empty) | App passwords are retired; repositories are listed per workspace. Data Center is planned. |
 | Azure DevOps Services / Server | PAT with Code (Read) | Cloud requires the organization name; Server takes the collection URL. |
+
+Self-hosted base URLs may be `https://` or `http://`. Cloud providers always use HTTPS. An `http://` URL triggers a warning and a confirmation, because the token then travels unencrypted; such accounts are tagged **HTTP** in the list. GitForge sends plain HTTP only to that account's own host and port, and never downgrades an HTTPS account.
 
 Git operations (fetch, pull, push, clone) use your normal Git credential setup, not these tokens.

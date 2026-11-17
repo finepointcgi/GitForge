@@ -56,7 +56,7 @@ flowchart LR
     Acc --> Prov
     Acc --> Keyring
     Acc --> Settings
-    Prov -- HTTPS only --> API[("Provider REST APIs")]
+    Prov -- "HTTPS (HTTP if configured)" --> API[("Provider REST APIs")]
     Cli -- "fetch/pull/push via GCM, SSH" --> Remote[("Git remotes")]
 ```
 
@@ -173,11 +173,15 @@ The window is three resizable panes. The left panel lists refs (local branches g
 
 `GitForge.Git.Undo.UndoManager` keeps one undo slot and one redo slot. `UndoableOperations` wraps commit, checkout, branch create/delete, reset, and discard; each records its inverse plus guards (for example, HEAD must still be where the action left it), so undo refuses rather than overwrite newer work. Discard snapshots the affected files' bytes in memory first (up to 64 MB), which also makes deleted untracked files recoverable.
 
+### Submodules
+
+`GitForge.Git.Submodules.SubmoduleAutoUpdater` keeps submodules in step with the superproject. `RepoWorkspace.RunAsync` captures each submodule's recorded commit before an operation; if HEAD moved, it runs `git submodule sync --recursive` and `git submodule update --init --recursive` for submodules whose recorded commit changed or that are new. Submodules with uncommitted changes are skipped and reported. On open, never-initialized submodules are initialized (safe, since nothing is checked out yet); out-of-sync ones get an **Update** prompt rather than a silent reset. The left panel shows the nested tree from `git submodule status --recursive`. The setting `AutoUpdateSubmodules` (default on) disables the automatic path.
+
 ## 4. Security posture
 
 - **No telemetry, no cloud dependency.** Network traffic is limited to the user's Git remotes and the hosting APIs they configure. Works fully offline or air-gapped.
 - **Secrets.** Hosting tokens are validated, then stored only in the OS keyring (Windows Credential Manager, DPAPI-protected, local-machine persistence, never roamed). Settings JSON contains no secrets. Plaintext buffers are cleared after keyring writes. Platforms without a keyring refuse to store tokens rather than fall back to plaintext.
-- **HTTPS only** for hosting APIs; plain-HTTP endpoints are rejected at account creation and per request.
+- **HTTPS by default** for hosting APIs. Cloud providers are fixed to HTTPS. A self-hosted account may be configured with an `http://` URL after an explicit warning and confirmation (the token then travels unencrypted); it is tagged **HTTP** in the UI. Per-request policy (`HostingDefaults.IsRequestAllowed`) permits plain HTTP only for such accounts and only to the configured host and port, so HTTPS accounts are never downgraded and pagination links cannot redirect a token to another host. Schemes other than `http`/`https` are rejected.
 - **Git authentication** is delegated to the user's Git configuration (Git Credential Manager, SSH agent, proxies, custom CA settings), so existing enterprise controls apply unchanged.
 - **Command execution.** Processes start with an argv list (never a shell). Ref names are validated against `git check-ref-format` rules, revisions starting with `-` are rejected, `--end-of-options` and `--literal-pathspecs` are used where applicable, and large path lists go through stdin (`--pathspec-from-file`). Interactive-rebase todo files accept only hex SHAs.
 - **Hooks and signing are honored.** All commits, including reworded commits during interactive rebase, run through `git commit`, so pre-commit/commit-msg hooks and GPG/SSH/X.509 signing policies apply.

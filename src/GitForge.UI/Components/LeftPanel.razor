@@ -179,19 +179,40 @@
 
         @if (s.Submodules.Count > 0)
         {
-            <SideSection Title="Submodules" Count="s.Submodules.Count" @bind-Expanded="_submodulesOpen">
+            <SideSection Title="Submodules" Count="SubmoduleRows.Count" @bind-Expanded="_submodulesOpen">
                 <div class="gf-side-actions">
-                    <button class="gf-link-button" @onclick="@(() => W.RunAsync("Updating submodules", (r, p) => r.Submodules.UpdateAsync(true, true, p)))">Update all (recursive)</button>
+                    <button class="gf-link-button" @onclick="W.UpdateSubmodulesAsync" title="git submodule sync + update --init --recursive (skips submodules with local changes)">
+                        <MudIcon Icon="@Icons.Material.Outlined.Sync" Size="Size.Small" /> Update all (recursive)
+                    </button>
+                    @if (W.Settings.AutoUpdateSubmodules)
+                    {
+                        <span class="gf-chip" title="Submodules follow checkouts, pulls, merges, rebases, resets, and undo automatically. Change in Settings.">auto</span>
+                    }
                 </div>
-                @foreach (var sm in s.Submodules)
+                @foreach (var row in SubmoduleRows)
                 {
-                    <div class="gf-ref-row" title="@($"{sm.Path} · {sm.Url}")" @ondblclick="@(() => W.OpenAsync(Path.Combine(s.WorkingDirectory, sm.Path)))">
-                        <MudIcon Icon="@Icons.Material.Outlined.Extension" Size="Size.Small" Class="gf-dim" />
-                        <span class="gf-ellipsis gf-grow">@sm.Name</span>
-                        @if (sm.State.HasFlag(SubmoduleState.NotInitialized)) { <span class="gf-pill gone">uninit</span> }
-                        else if (sm.State.HasFlag(SubmoduleState.OutOfSync)) { <span class="gf-pill behind">out of sync</span> }
-                        else if (sm.State.HasFlag(SubmoduleState.WorkDirDirty)) { <span class="gf-pill ahead">dirty</span> }
-                    </div>
+                    var top = row.Depth == 0;
+                    <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
+                        <ActivatorContent Context="menu">
+                            <div class="gf-ref-row" style="padding-left:@(18 + (row.Depth * 16))px" title="@row.Tooltip"
+                                 @oncontextmenu="@(e => menu.OpenAsync(e))" @ondblclick="@(() => W.OpenAsync(Path.Combine(s.WorkingDirectory, row.Path)))">
+                                <MudIcon Icon="@(top ? Icons.Material.Outlined.Extension : Icons.Material.Outlined.SubdirectoryArrowRight)" Size="Size.Small" Class="gf-dim" />
+                                <span class="gf-ellipsis gf-grow">@row.Name</span>
+                                @switch (row.State)
+                                {
+                                    case SubmoduleSyncState.NotInitialized: <span class="gf-pill gone">uninit</span> break;
+                                    case SubmoduleSyncState.OutOfSync: <span class="gf-pill behind">out of sync</span> break;
+                                    case SubmoduleSyncState.Conflicted: <span class="gf-pill gone">conflict</span> break;
+                                }
+                                @if (row.Dirty) { <span class="gf-pill ahead" title="Uncommitted changes inside the submodule">dirty</span> }
+                            </div>
+                        </ActivatorContent>
+                        <ChildContent>
+                            <MudMenuItem Disabled="@(!top)" OnClick="@(() => W.UpdateSubmoduleAsync(row.Path))">Update @row.Name (recursive)</MudMenuItem>
+                            <MudMenuItem OnClick="@(() => W.OpenAsync(Path.Combine(s.WorkingDirectory, row.Path)))">Open in GitForge</MudMenuItem>
+                            <MudMenuItem OnClick="@(() => Shell.RevealInFileManager(Path.Combine(s.WorkingDirectory, row.Path)))">Show in Explorer</MudMenuItem>
+                        </ChildContent>
+                    </MudMenu>
                 }
             </SideSection>
         }
@@ -209,6 +230,35 @@
     private IReadOnlyList<HostedPullRequest>? _prs;
     private HostingAccount? _prAccount;
     private string? _prsLoadedFor;
+
+    private sealed record SubmoduleRow(string Path, string Name, int Depth, SubmoduleSyncState State, bool Dirty, string Tooltip);
+
+    /// <summary>Nested rows from <c>git submodule status --recursive</c>, enriched with dirty state for top-level submodules.</summary>
+    private IReadOnlyList<SubmoduleRow> SubmoduleRows
+    {
+        get
+        {
+            var snapshot = W.Snapshot;
+            var byPath = snapshot?.Submodules.ToDictionary(m => m.Path, StringComparer.Ordinal) ?? [];
+            if (W.SubmoduleStatus.Count > 0)
+            {
+                return W.SubmoduleStatus.Select(e =>
+                {
+                    byPath.TryGetValue(e.Path, out var info);
+                    var dirty = info?.State.HasFlag(SubmoduleState.WorkDirDirty) == true;
+                    return new SubmoduleRow(e.Path, e.Name, e.Depth, e.State, dirty,
+                        $"{e.Path} · {e.Sha[..Math.Min(8, e.Sha.Length)]}{(e.Describe is null ? null : $" ({e.Describe})")}{(info is null ? null : $" · {info.Url}")}");
+                }).ToList();
+            }
+
+            // Fallback before the recursive status arrives: top-level submodules from libgit2.
+            return (snapshot?.Submodules ?? []).Select(m => new SubmoduleRow(
+                m.Path, m.Name, 0,
+                m.State.HasFlag(SubmoduleState.NotInitialized) ? SubmoduleSyncState.NotInitialized
+                    : m.State.HasFlag(SubmoduleState.OutOfSync) ? SubmoduleSyncState.OutOfSync : SubmoduleSyncState.Current,
+                m.State.HasFlag(SubmoduleState.WorkDirDirty), $"{m.Path} · {m.Url}")).ToList();
+        }
+    }
 
     protected override void OnInitialized() => W.Changed += OnChanged;
 
