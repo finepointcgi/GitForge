@@ -9,7 +9,12 @@
     <RootNamespace>GitForge.Desktop</RootNamespace>
     <AssemblyName>GitForge</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Explorer, taskbar, and Alt+Tab icon. Regenerate from assets/brand/gitforge-logo.png (16-256 px). -->
+    <ApplicationIcon>Assets\GitForge.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\GitForge.ico" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />

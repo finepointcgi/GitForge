@@ -22,8 +22,14 @@ public enum ThemePreference
 /// <summary>Per-user, non-secret settings persisted as JSON.</summary>
 public sealed record AppSettings
 {
+    /// <summary>GitForge green (the logo's lime). Light mode shows it as a darker green for contrast on white.</summary>
+    public const string DefaultAccentColor = "#86D24A";
+
+    /// <summary>The blue default before the green theme; stored settings with it are moved to <see cref="DefaultAccentColor"/>.</summary>
+    public const string LegacyDefaultAccentColor = "#3B82F6";
+
     public ThemePreference Theme { get; init; } = ThemePreference.System;
-    public string AccentColor { get; init; } = "#3B82F6";
+    public string AccentColor { get; init; } = DefaultAccentColor;
     public bool VimNavigation { get; init; } = true;
     public string? GitExecutablePath { get; init; }
     public string? DefaultCloneDirectory { get; init; }

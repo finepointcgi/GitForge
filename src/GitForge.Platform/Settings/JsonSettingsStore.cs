@@ -38,6 +38,10 @@ public sealed class JsonSettingsStore : ISettingsStore, IDisposable
                 {
                     await using var stream = File.OpenRead(_path);
                     Current = await JsonSerializer.DeserializeAsync<AppSettings>(stream, JsonOptions, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
+                    if (string.Equals(Current.AccentColor, AppSettings.LegacyDefaultAccentColor, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Current = Current with { AccentColor = AppSettings.DefaultAccentColor }; // never customized: follow the new default
+                    }
                 }
                 catch (JsonException)
                 {

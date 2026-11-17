@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:blazor="clr-namespace:Microsoft.AspNetCore.Components.WebView.Wpf;assembly=Microsoft.AspNetCore.Components.WebView.Wpf"
         xmlns:ui="clr-namespace:GitForge.UI;assembly=GitForge.UI"
-        Title="GitForge" Width="1440" Height="900" MinWidth="900" MinHeight="560"
-        WindowStartupLocation="CenterScreen" Background="#0D1117">
+        Title="GitForge" Icon="Assets/GitForge.ico" Width="1440" Height="900" MinWidth="900" MinHeight="560"
+        WindowStartupLocation="CenterScreen" Background="#0A120E">
     <blazor:BlazorWebView x:Name="WebView" HostPage="wwwroot\index.html" Services="{DynamicResource services}"
                           BlazorWebViewInitializing="OnWebViewInitializing" BlazorWebViewInitialized="OnWebViewInitialized">
         <blazor:BlazorWebView.RootComponents>

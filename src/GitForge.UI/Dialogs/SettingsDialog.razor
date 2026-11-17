@@ -13,6 +13,10 @@
             <div class="gf-dialog-row">
                 <input type="color" value="@_s.AccentColor" @onchange="@(e => _s.AccentColor = e.Value?.ToString() ?? _s.AccentColor)" aria-label="Accent color" />
                 <span>Accent color <span class="gf-mono gf-dim">@_s.AccentColor</span></span>
+                @if (!string.Equals(_s.AccentColor, AppSettings.DefaultAccentColor, StringComparison.OrdinalIgnoreCase))
+                {
+                    <button type="button" class="gf-link-button" @onclick="@(() => _s.AccentColor = AppSettings.DefaultAccentColor)">Use GitForge green</button>
+                }
             </div>
             <MudCheckBox T="bool" @bind-Value="_s.VimNavigation" Label="Vim-style navigation (j/k, gg/G, h/l, s/u/d)" Size="Size.Small" Dense="true" />
             <MudCheckBox T="bool" @bind-Value="_s.SyntaxHighlighting" Label="Syntax highlighting in diffs and blame" Size="Size.Small" Dense="true" />
@@ -37,7 +41,7 @@
     private sealed class Model
     {
         public ThemePreference Theme { get; set; }
-        public string AccentColor { get; set; } = "#3B82F6";
+        public string AccentColor { get; set; } = AppSettings.DefaultAccentColor;
         public bool VimNavigation { get; set; }
         public bool FetchOnOpen { get; set; }
         public bool AutoUpdateSubmodules { get; set; }

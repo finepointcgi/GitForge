@@ -3,7 +3,10 @@
 
 <div class="gf-welcome">
     <div class="gf-welcome-card">
-        <h1>GitForge</h1>
+        <div class="gf-welcome-brand">
+            <img src="_content/GitForge.UI/gitforge-logo.png" width="64" height="64" alt="" />
+            <h1>GitForge</h1>
+        </div>
         <p class="gf-dim">Fast, keyboard-first Git client. Open or clone a repository to begin.</p>
         <div class="gf-welcome-actions">
             <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Outlined.FolderOpen" OnClick="@(() => Shortcuts.RaiseAsync("repo.open"))">Open repository</MudButton>

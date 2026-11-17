@@ -24,7 +24,7 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 | Conflicts | Use ours/theirs, external merge tool (`git mergetool`), mark resolved | ✅ |
 | Hosting | GitHub, GitLab, Bitbucket Cloud, Azure DevOps (cloud and server) accounts; token validation; keyring storage | ✅ |
 | Hosting | Browse and clone account repositories; list open PRs/MRs; "create PR" deep links | ✅ |
-| UX | Keyboard-first (Ctrl shortcuts + vim keys), resizable panes, dark/light/system theme, accent color | ✅ |
+| UX | Keyboard-first (Ctrl shortcuts + vim keys), resizable panes, dark/light/system theme (forest-green dark mode), accent color (default GitForge green), app icon | ✅ |
 | UX | Graph-centric 3-pane layout: refs panel, graph with WIP row and Branch/Tag column, commit panel (summary/description) | ✅ |
 | UX | Offline author-initial avatars on graph nodes (no Gravatar or network lookups) | ✅ |
 | UX | Command palette (Ctrl+P): actions, branch checkout, recent repositories | ✅ |

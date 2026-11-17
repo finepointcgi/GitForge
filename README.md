@@ -15,6 +15,7 @@ A fast, keyboard-first Git client for Windows, built with C#/.NET 10, Blazor, an
 - **Automatic recursive submodules:** after checkout, pull, merge, rebase, reset, or undo, submodules whose recorded commit changed are synced and updated (`--init --recursive`); submodules with local changes are never overwritten. Uninitialized submodules are initialized on open. Toggle in **Settings**.
 - **Advanced Git:** visual interactive rebase, reflog recovery, conflict tools, stash manager, submodules.
 - **Multi-account hosting:** tokens in Windows Credential Manager, repository browser, pull request list.
+- **Forest-green dark theme** matching the GitForge icon. The accent color defaults to GitForge green (a darker green in light mode, for contrast) and can be changed in **Settings**.
 - **Secure by default:** no telemetry, HTTPS APIs by default (plain HTTP only for self-hosted servers you explicitly configure that way), no plaintext secrets on disk, hooks and signing honored.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and data models, and [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan.
