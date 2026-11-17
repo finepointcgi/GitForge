@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>GitForge.DevHost</RootNamespace>
+    <Description>Development-only browser host (Blazor Server, loopback only) for fast UI iteration and automated UI checks.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\GitForge.UI\GitForge.UI.csproj" />
+  </ItemGroup>
+</Project>

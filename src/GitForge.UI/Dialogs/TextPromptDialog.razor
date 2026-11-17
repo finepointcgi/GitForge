@@ -1,0 +1,55 @@
+@using GitForge.Core.Validation
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" @bind-Value="_value" Label="@Label" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      AutoFocus="true" Lines="@(Multiline ? 5 : 1)" OnKeyUp="OnKeyUp" Error="@(Error is not null)" ErrorText="@Error" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(Error is not null)" OnClick="Submit">OK</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public string Label { get; set; } = "Value";
+    [Parameter] public string Initial { get; set; } = string.Empty;
+    [Parameter] public bool ValidateRef { get; set; }
+    [Parameter] public bool AllowEmpty { get; set; }
+    [Parameter] public bool Multiline { get; set; }
+
+    private string _value = string.Empty;
+
+    private string? Error =>
+        ValidateRef && _value.Length > 0 ? RefNameValidator.Validate(_value)
+        : !AllowEmpty && string.IsNullOrWhiteSpace(_value) ? "Required" : null;
+
+    protected override void OnInitialized() => _value = Initial;
+
+    private void OnKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !Multiline) Submit();
+    }
+
+    private void Submit()
+    {
+        if (Error is not null) return;
+        Dialog.Close(DialogResult.Ok(_value.Trim()));
+    }
+
+    public static async Task<string?> ShowAsync(IDialogService dialogs, string title, string label, string initial, bool validateRef = false, bool allowEmpty = false, bool multiline = false)
+    {
+        var parameters = new DialogParameters<TextPromptDialog>
+        {
+            { d => d.Label, label },
+            { d => d.Initial, initial },
+            { d => d.ValidateRef, validateRef },
+            { d => d.AllowEmpty, allowEmpty },
+            { d => d.Multiline, multiline },
+        };
+        var dialog = await dialogs.ShowAsync<TextPromptDialog>(title, parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true });
+        var result = await dialog.Result;
+        return result is { Canceled: false, Data: string s } ? s : null;
+    }
+}

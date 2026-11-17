@@ -1,0 +1,28 @@
+@inject RepoWorkspace W
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" @bind-Value="_message" Label="Message" Placeholder="WIP: what you were doing" Variant="Variant.Outlined" Margin="Margin.Dense" AutoFocus="true" />
+        <MudCheckBox T="bool" @bind-Value="_untracked" Label="Include untracked files" Size="Size.Small" Dense="true" />
+        <MudCheckBox T="bool" @bind-Value="_keepIndex" Label="Keep staged changes in the working tree (--keep-index)" Size="Size.Small" Dense="true" />
+        <MudCheckBox T="bool" @bind-Value="_stagedOnlyPaths" Label="@($"Stash only the {W.Status.Staged.Count} staged file(s)")" Disabled="@(W.Status.Staged.Count == 0)" Size="Size.Small" Dense="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@W.Status.IsClean" OnClick="Save">Stash</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    private string? _message;
+    private bool _untracked, _keepIndex, _stagedOnlyPaths;
+
+    private async Task Save()
+    {
+        var paths = _stagedOnlyPaths ? W.Status.Staged.Select(f => f.Path).ToList() : null;
+        var request = new StashRequest(_message, _untracked, _keepIndex, paths);
+        Dialog.Close();
+        await W.RunAsync("Stashing", (r, _) => r.Stashes.SaveAsync(request), "Changes stashed");
+    }
+}

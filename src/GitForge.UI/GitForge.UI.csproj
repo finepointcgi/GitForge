@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <RootNamespace>GitForge.UI</RootNamespace>
+    <Description>MudBlazor UI shared by every host (WPF desktop, dev browser host, future Photino/MAUI hosts).</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="MudBlazor" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\GitForge.Core\GitForge.Core.csproj" />
+    <ProjectReference Include="..\GitForge.Git\GitForge.Git.csproj" />
+    <ProjectReference Include="..\GitForge.Hosting\GitForge.Hosting.csproj" />
+    <ProjectReference Include="..\GitForge.Platform\GitForge.Platform.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,226 @@
+@implements IDisposable
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+@inject IDialogService Dialogs
+@inject IJSRuntime JS
+
+<div class="gf-staging">
+    <div class="gf-split-x gf-staging-top" id="gf-staging">
+        <div class="gf-pane gf-file-groups @(_focus == Pane.Files ? "focused" : null)" @onclick="@(() => _focus = Pane.Files)">
+            @if (W.Status.Conflicted.Count > 0)
+            {
+                <FileList Title="Conflicts" Files="W.Status.Conflicted" Selected="_selected" OnSelect="Select" />
+            }
+            <FileList Title="Staged files" Files="W.Status.Staged" Selected="_selected" OnSelect="Select" OnUnstage="@(f => Unstage([f]))" EmptyText="Nothing staged">
+                <HeaderActions>
+                    @if (W.Status.Staged.Count > 0)
+                    {
+                        <button class="gf-link-button" @onclick="UnstageAll">Unstage all</button>
+                    }
+                </HeaderActions>
+            </FileList>
+            <FileList Title="Unstaged files" Files="W.Status.Unstaged" Selected="_selected" OnSelect="Select" OnStage="@(f => Stage([f]))" OnDiscard="@(f => Discard([f]))" EmptyText="Working tree clean">
+                <HeaderActions>
+                    @if (W.Status.Unstaged.Count > 0)
+                    {
+                        <button class="gf-link-button" @onclick="StageAll">Stage all</button>
+                        <button class="gf-link-button danger" @onclick="@(() => Discard(W.Status.Unstaged))">Discard all</button>
+                    }
+                </HeaderActions>
+            </FileList>
+        </div>
+        <div class="gf-splitter gf-splitter-x" data-var="--gf-files-w" data-target="gf-staging" data-min="220" data-max="900"></div>
+        <div class="gf-pane" @onclick="@(() => _focus = Pane.Diff)">
+            @if (_selected?.Kind == FileChangeKind.Conflicted)
+            {
+                <ConflictActions Path="@_selected.Path" />
+            }
+            else
+            {
+                <DiffViewer Diff="_diff" Loading="_diffLoading" Title="@_selected?.Path" Area="_selected?.Area" HasFocus="@(_focus == Pane.Diff)"
+                            Placeholder="Select a file to see its changes" OnApply="ApplyLines" OnReload="ReloadDiff" />
+            }
+        </div>
+    </div>
+
+    <div class="gf-commit-box">
+        <textarea @ref="_messageBox" class="gf-input gf-commit-message" placeholder="Commit message (Ctrl+Enter to commit)" @bind="_message" @bind:event="oninput" rows="3" aria-label="Commit message"></textarea>
+        <div class="gf-commit-actions">
+            <MudCheckBox T="bool" Value="_amend" ValueChanged="SetAmend" Size="Size.Small" Dense="true" Label="Amend last commit" />
+            <MudCheckBox T="bool" @bind-Value="_signOff" Size="Size.Small" Dense="true" Label="Sign-off" />
+            <MudCheckBox T="bool" @bind-Value="_pushAfter" Size="Size.Small" Dense="true" Label="Push after commit" />
+            @if (SubjectLength > 72)
+            {
+                <span class="gf-warn gf-small">Subject is @SubjectLength chars (72 recommended)</span>
+            }
+            <span class="gf-spacer"></span>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="@(!CanCommit)" OnClick="Commit">
+                @(_amend ? "Amend commit" : $"Commit {W.Status.Staged.Count} file{(W.Status.Staged.Count == 1 ? string.Empty : "s")}")
+            </MudButton>
+        </div>
+    </div>
+</div>
+
+@code {
+    private enum Pane { Files, Diff }
+
+    private FileStatusEntry? _selected;
+    private FileDiff? _diff;
+    private bool _diffLoading;
+    private Pane _focus = Pane.Files;
+    private string _message = string.Empty;
+    private bool _amend, _signOff, _pushAfter;
+    private ElementReference _messageBox;
+    private int _diffVersion;
+
+    private int SubjectLength => _message.Split('\n')[0].Trim().Length;
+    private bool CanCommit => !W.IsBusy && (_amend || (W.Status.Staged.Count > 0 && _message.Trim().Length > 0)) && W.Status.Conflicted.Count == 0;
+
+    private IEnumerable<FileStatusEntry> AllFiles => W.Status.Conflicted.Concat(W.Status.Staged).Concat(W.Status.Unstaged);
+
+    protected override void OnInitialized()
+    {
+        W.Changed += OnChanged;
+        Shortcuts.Command += OnCommand;
+        _selected = AllFiles.FirstOrDefault();
+        _ = ReloadDiff();
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        // Keep the selection stable across refreshes; follow a file that moved between staged/unstaged.
+        var all = AllFiles.ToList();
+        var match = _selected is null ? null
+            : all.FirstOrDefault(f => f.Path == _selected.Path && f.Area == _selected.Area)
+              ?? all.FirstOrDefault(f => f.Path == _selected.Path);
+        if (match is null) match = all.FirstOrDefault();
+        var changed = match != _selected;
+        _selected = match;
+        await ReloadDiff();
+        if (!changed) StateHasChanged();
+    });
+
+    private async Task Select(FileStatusEntry f)
+    {
+        _selected = f;
+        _focus = Pane.Files;
+        await ReloadDiff();
+    }
+
+    private async Task ReloadDiff()
+    {
+        var file = _selected;
+        var version = ++_diffVersion;
+        if (file is null || W.Repo is not { } repo)
+        {
+            _diff = null;
+            StateHasChanged();
+            return;
+        }
+
+        _diffLoading = _diff is null || _diff.Path != file.Path;
+        StateHasChanged();
+        try
+        {
+            var options = new DiffOptions(W.Settings.IgnoreWhitespace);
+            var diff = await Task.Run(() => repo.Read.GetWorkingDiffAsync(file, options));
+            if (version == _diffVersion) _diff = diff;
+        }
+        catch (Exception ex)
+        {
+            if (version == _diffVersion) _diff = null;
+            W.Error("Load diff", ex);
+        }
+        finally
+        {
+            if (version == _diffVersion) _diffLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task Stage(IReadOnlyCollection<FileStatusEntry> files) =>
+        W.RunAsync("Staging", (r, _) => r.Index.StageAsync(files.Select(f => f.Path).ToList()));
+
+    private Task Unstage(IReadOnlyCollection<FileStatusEntry> files) =>
+        W.RunAsync("Unstaging", (r, _) => r.Index.UnstageAsync(files.SelectMany(f => f.OldPath is null ? [f.Path] : new[] { f.Path, f.OldPath }).ToList()));
+
+    private Task StageAll() => W.RunAsync("Staging all", (r, _) => r.Index.StageAllAsync());
+
+    private Task UnstageAll() => W.RunAsync("Unstaging all", (r, _) => r.Index.UnstageAllAsync());
+
+    private async Task Discard(IReadOnlyCollection<FileStatusEntry> files)
+    {
+        if (files.Count == 0) return;
+        var untracked = files.Count(f => f.Kind == FileChangeKind.Untracked);
+        var what = files.Count == 1 ? $"'{files.First().Path}'" : $"{files.Count} files";
+        var warning = untracked > 0 ? $" {untracked} untracked file(s) will be deleted." : string.Empty;
+        if (await Dialogs.ShowMessageBoxAsync("Discard changes", $"Discard all changes to {what}? This cannot be undone.{warning}", yesText: "Discard", cancelText: "Cancel") != true) return;
+        await W.RunAsync("Discarding", (r, _) => r.Index.DiscardAsync(files));
+    }
+
+    private async Task ApplyLines((IReadOnlySet<LineRef> Lines, PatchAction Action) e)
+    {
+        if (_diff is not { } diff) return;
+        if (e.Action == PatchAction.Discard &&
+            await Dialogs.ShowMessageBoxAsync("Discard lines", $"Discard {e.Lines.Count} changed line(s) from the working tree? This cannot be undone.", yesText: "Discard", cancelText: "Cancel") != true)
+        {
+            return;
+        }
+
+        await W.RunAsync(e.Action.ToString(), (r, _) => r.Index.ApplySelectionAsync(diff, e.Lines, e.Action));
+    }
+
+    private async Task SetAmend(bool value)
+    {
+        _amend = value;
+        if (value && string.IsNullOrWhiteSpace(_message) && W.Repo is { } repo)
+        {
+            _message = (await repo.Index.GetHeadMessageAsync())?.TrimEnd() ?? string.Empty;
+        }
+    }
+
+    private async Task Commit()
+    {
+        if (!CanCommit) return;
+        var request = new CommitRequest(_message, _amend, _signOff, AllowEmpty: _amend && W.Status.Staged.Count == 0);
+        var ok = await W.RunAsync(_amend ? "Amending" : "Committing", (r, _) => r.Index.CommitAsync(request), _amend ? "Commit amended" : "Committed");
+        if (!ok) return;
+        _message = string.Empty;
+        _amend = false;
+        if (_pushAfter) await W.PushAsync();
+    }
+
+    private async Task OnCommand(string command)
+    {
+        if (W.View != WorkspaceView.FileStatus) return;
+        switch (command)
+        {
+            case "commit.submit": await Commit(); break;
+            case "pane.next": _focus = Pane.Diff; StateHasChanged(); break;
+            case "pane.prev": _focus = Pane.Files; StateHasChanged(); break;
+            case "escape": _focus = Pane.Files; StateHasChanged(); break;
+        }
+
+        if (_focus != Pane.Files) return;
+        var all = AllFiles.ToList();
+        var idx = _selected is null ? -1 : all.FindIndex(f => f.Path == _selected.Path && f.Area == _selected.Area);
+        switch (command)
+        {
+            case "nav.down" when all.Count > 0: await Select(all[Math.Min(idx + 1, all.Count - 1)]); break;
+            case "nav.up" when all.Count > 0: await Select(all[Math.Max(idx - 1, 0)]); break;
+            case "nav.top" when all.Count > 0: await Select(all[0]); break;
+            case "nav.bottom" when all.Count > 0: await Select(all[^1]); break;
+            case "nav.open": _focus = Pane.Diff; StateHasChanged(); break;
+            case "item.stage" when _selected is { Area: StagingArea.Unstaged, Kind: not FileChangeKind.Conflicted }: await Stage([_selected]); break;
+            case "item.unstage" when _selected is { Area: StagingArea.Staged }: await Unstage([_selected]); break;
+            case "item.discard" when _selected is { Area: StagingArea.Unstaged, Kind: not FileChangeKind.Conflicted }: await Discard([_selected]); break;
+            case "search.focus": await _messageBox.FocusAsync(); break;
+        }
+    }
+
+    public void Dispose()
+    {
+        W.Changed -= OnChanged;
+        Shortcuts.Command -= OnCommand;
+    }
+}

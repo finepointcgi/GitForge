@@ -1,0 +1,389 @@
+using GitForge.Core.Abstractions;
+using GitForge.Core.Diff;
+using GitForge.Core.Models;
+using GitForge.Core.Rebase;
+using GitForge.Core.Validation;
+
+namespace GitForge.Git.Engine;
+
+/// <summary>Index, commit, and conflict operations (git CLI: honors hooks, signing, LFS filters).</summary>
+internal sealed class IndexOperations(RepoContext ctx) : IIndexOperations
+{
+    public Task StageAsync(IReadOnlyCollection<string> paths, CancellationToken cancellationToken = default) =>
+        paths.Count == 0 ? Task.CompletedTask :
+        ctx.WriteAsync("stage", ["--literal-pathspecs", "add", "-A", .. RepoContext.PathspecFromStdin], cancellationToken, RepoContext.PathspecPayload(paths));
+
+    public Task StageAllAsync(CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("stage all", ["add", "-A"], cancellationToken);
+
+    public async Task UnstageAsync(IReadOnlyCollection<string> paths, CancellationToken cancellationToken = default)
+    {
+        if (paths.Count == 0) return;
+        if (await IsUnbornAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await ctx.WriteAsync("unstage", ["--literal-pathspecs", "rm", "--cached", "-r", "-q", "--", .. paths], cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await ctx.WriteAsync("unstage", ["--literal-pathspecs", "restore", "--staged", .. RepoContext.PathspecFromStdin], cancellationToken, RepoContext.PathspecPayload(paths)).ConfigureAwait(false);
+    }
+
+    public async Task UnstageAllAsync(CancellationToken cancellationToken = default)
+    {
+        if (await IsUnbornAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await ctx.WriteAsync("unstage all", ["rm", "--cached", "-r", "-q", "--", "."], cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await ctx.WriteAsync("unstage all", ["reset", "-q"], cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task DiscardAsync(IReadOnlyCollection<FileStatusEntry> files, CancellationToken cancellationToken = default)
+    {
+        var untracked = files.Where(f => f.Kind == FileChangeKind.Untracked).Select(f => f.Path).ToList();
+        var tracked = files.Where(f => f.Kind != FileChangeKind.Untracked).Select(f => f.Path).ToList();
+
+        if (tracked.Count > 0)
+        {
+            await ctx.WriteAsync("discard", ["--literal-pathspecs", "restore", "--worktree", .. RepoContext.PathspecFromStdin], cancellationToken, RepoContext.PathspecPayload(tracked)).ConfigureAwait(false);
+        }
+
+        if (untracked.Count > 0)
+        {
+            // git clean only ever removes untracked files, so tracked content can never be lost here.
+            await ctx.WriteAsync("remove untracked", ["--literal-pathspecs", "clean", "-f", "-q", "--", .. untracked], cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task ApplySelectionAsync(FileDiff diff, IReadOnlySet<LineRef> selection, PatchAction action, CancellationToken cancellationToken = default)
+    {
+        var patch = PatchBuilder.Build(diff, selection, action);
+        if (patch is null) return;
+
+        var args = new List<string> { "apply", "--whitespace=nowarn" };
+        // git apply refuses context-free hunks (diffs produced with -U0) unless told to accept them.
+        if (diff.Hunks.Any(h => h.Lines.All(l => l.IsChange))) args.Add("--unidiff-zero");
+        if (action != PatchAction.Discard) args.Add("--cached");
+        if (PatchBuilder.IsReverse(action)) args.Add("--reverse");
+        args.Add("-");
+        await ctx.WriteAsync($"{action.ToString().ToLowerInvariant()} selection", args, cancellationToken, patch).ConfigureAwait(false);
+    }
+
+    public async Task<string> CommitAsync(CommitRequest request, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.Message) && !request.Amend) throw new ArgumentException("Commit message is required.", nameof(request));
+
+        var args = new List<string> { "commit", "--cleanup=strip", "-F", "-" };
+        if (request.Amend) args.Add("--amend");
+        if (request.SignOff) args.Add("--signoff");
+        if (request.AllowEmpty) args.Add("--allow-empty");
+        await ctx.WriteAsync("commit", args, cancellationToken, request.Message).ConfigureAwait(false);
+
+        var head = await ctx.RunAsync(["rev-parse", "HEAD"], cancellationToken).ConfigureAwait(false);
+        return head.EnsureSuccess("rev-parse").StandardOutput.Trim();
+    }
+
+    public Task<string?> GetHeadMessageAsync(CancellationToken cancellationToken = default) =>
+        ctx.Lib.RunAsync(r => r.Info.IsHeadUnborn ? null : r.Head.Tip?.Message, cancellationToken);
+
+    public async Task ResolveConflictAsync(string path, ConflictSide side, CancellationToken cancellationToken = default)
+    {
+        var flag = side == ConflictSide.Ours ? "--ours" : "--theirs";
+        await ctx.WriteAsync("checkout side", ["--literal-pathspecs", "checkout", flag, "--", path], cancellationToken).ConfigureAwait(false);
+        await MarkResolvedAsync(path, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task MarkResolvedAsync(string path, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("mark resolved", ["--literal-pathspecs", "add", "--", path], cancellationToken);
+
+    public Task<GitResult> LaunchMergeToolAsync(string path, string? tool, CancellationToken cancellationToken = default)
+    {
+        var args = new List<string> { "--literal-pathspecs", "mergetool", "--no-prompt" };
+        if (!string.IsNullOrWhiteSpace(tool)) args.Add($"--tool={tool}");
+        args.AddRange(["--", path]);
+        return ctx.TryWriteAsync(args, cancellationToken);
+    }
+
+    private Task<bool> IsUnbornAsync(CancellationToken ct) => ctx.Lib.RunAsync(r => r.Info.IsHeadUnborn, ct);
+}
+
+internal sealed class BranchOperations(RepoContext ctx) : IBranchOperations
+{
+    public Task CheckoutAsync(string branchOrCommit, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("checkout", ["checkout", "--end-of-options", Guard(branchOrCommit), "--"], cancellationToken);
+
+    public Task CheckoutRemoteBranchAsync(string remoteBranch, string localName, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("checkout", ["checkout", "-b", Valid(localName), "--track", Guard(remoteBranch), "--"], cancellationToken);
+
+    public Task CreateAsync(string name, string startPoint, bool checkout, CancellationToken cancellationToken = default) =>
+        checkout
+            ? ctx.WriteAsync("create branch", ["checkout", "-b", Valid(name), Guard(startPoint), "--"], cancellationToken)
+            : ctx.WriteAsync("create branch", ["branch", Valid(name), Guard(startPoint)], cancellationToken);
+
+    public Task RenameAsync(string oldName, string newName, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("rename branch", ["branch", "-m", Guard(oldName), Valid(newName)], cancellationToken);
+
+    public Task DeleteAsync(string name, bool force, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("delete branch", ["branch", force ? "-D" : "-d", Guard(name)], cancellationToken);
+
+    public Task DeleteRemoteAsync(string remote, string branch, IProgress<string>? progress, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("delete remote branch", ["push", "--progress", Guard(remote), "--delete", Guard(branch)], cancellationToken, progress: progress);
+
+    public Task SetUpstreamAsync(string localBranch, string? upstream, CancellationToken cancellationToken = default) =>
+        upstream is null
+            ? ctx.WriteAsync("unset upstream", ["branch", "--unset-upstream", Guard(localBranch)], cancellationToken)
+            : ctx.WriteAsync("set upstream", ["branch", $"--set-upstream-to={Guard(upstream)}", Guard(localBranch)], cancellationToken);
+
+    public Task CreateTagAsync(string name, string target, string? message, CancellationToken cancellationToken = default) =>
+        string.IsNullOrWhiteSpace(message)
+            ? ctx.WriteAsync("create tag", ["tag", Valid(name), Guard(target)], cancellationToken)
+            : ctx.WriteAsync("create tag", ["tag", "-a", "-F", "-", Valid(name), Guard(target)], cancellationToken, message);
+
+    public Task DeleteTagAsync(string name, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("delete tag", ["tag", "-d", Guard(name)], cancellationToken);
+
+    internal static string Valid(string refName)
+    {
+        var error = RefNameValidator.Validate(refName);
+        return error is null ? refName : throw new ArgumentException(error, nameof(refName));
+    }
+
+    /// <summary>Blocks option injection for existing ref names and revisions passed positionally.</summary>
+    internal static string Guard(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.StartsWith('-')) throw new ArgumentException($"Invalid ref or revision '{value}'.", nameof(value));
+        return value;
+    }
+}
+
+internal sealed class RemoteOperations(RepoContext ctx) : IRemoteOperations
+{
+    public Task FetchAsync(FetchRequest request, IProgress<string>? progress, CancellationToken cancellationToken = default)
+    {
+        var args = new List<string> { "fetch", "--progress" };
+        if (request.Prune) args.Add("--prune");
+        if (request.Tags) args.Add("--tags");
+        if (request.Remote is { } r) args.Add(BranchOperations.Guard(r));
+        else if (request.AllRemotes) args.Add("--all");
+        return ctx.WriteAsync("fetch", args, cancellationToken, progress: progress);
+    }
+
+    public Task PullAsync(PullChangesRequest request, IProgress<string>? progress, CancellationToken cancellationToken = default)
+    {
+        var args = new List<string> { "pull", "--progress", request.Rebase ? "--rebase" : "--no-rebase" };
+        if (request.FastForwardOnly) args.Add("--ff-only");
+        if (request.Remote is { } r)
+        {
+            args.Add(BranchOperations.Guard(r));
+            if (request.Branch is { } b) args.Add(BranchOperations.Guard(b));
+        }
+
+        return ctx.WriteAsync("pull", args, cancellationToken, progress: progress);
+    }
+
+    public Task PushAsync(PushRequest request, IProgress<string>? progress, CancellationToken cancellationToken = default)
+    {
+        var args = new List<string> { "push", "--progress" };
+        if (request.SetUpstream) args.Add("--set-upstream");
+        if (request.ForceWithLease) args.Add("--force-with-lease");
+        if (request.IncludeTags) args.Add("--follow-tags");
+        var local = BranchOperations.Guard(request.LocalBranch);
+        var remoteBranch = BranchOperations.Guard(request.RemoteBranch ?? request.LocalBranch);
+        args.AddRange([BranchOperations.Guard(request.Remote), $"refs/heads/{local}:refs/heads/{remoteBranch}"]);
+        return ctx.WriteAsync("push", args, cancellationToken, progress: progress);
+    }
+
+    public Task AddAsync(string name, string url, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("add remote", ["remote", "add", "--", BranchOperations.Valid(name), url], cancellationToken);
+
+    public Task RemoveAsync(string name, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("remove remote", ["remote", "remove", BranchOperations.Guard(name)], cancellationToken);
+
+    public Task PruneAsync(string remote, IProgress<string>? progress, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("prune", ["remote", "prune", BranchOperations.Guard(remote)], cancellationToken, progress: progress);
+}
+
+internal sealed class StashOperations(RepoContext ctx, IRepositoryReader reader) : IStashOperations
+{
+    public Task SaveAsync(StashRequest request, CancellationToken cancellationToken = default)
+    {
+        var args = new List<string> { "--literal-pathspecs", "stash", "push" };
+        if (!string.IsNullOrWhiteSpace(request.Message)) args.AddRange(["-m", request.Message]);
+        if (request.IncludeUntracked) args.Add("--include-untracked");
+        if (request.KeepIndex) args.Add("--keep-index");
+        if (request.Paths is { Count: > 0 } paths)
+        {
+            args.AddRange(RepoContext.PathspecFromStdin);
+            return ctx.WriteAsync("stash", args, cancellationToken, RepoContext.PathspecPayload(paths));
+        }
+
+        return ctx.WriteAsync("stash", args, cancellationToken);
+    }
+
+    public async Task ApplyAsync(int index, bool pop, bool restoreIndex, CancellationToken cancellationToken = default)
+    {
+        var status = await reader.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+        if (status.Conflicted.Count > 0)
+        {
+            throw new InvalidOperationException("Resolve existing conflicts before applying a stash.");
+        }
+
+        var args = new List<string> { "stash", pop ? "pop" : "apply" };
+        if (restoreIndex) args.Add("--index");
+        args.Add($"stash@{{{index}}}");
+        await ctx.WriteAsync(pop ? "stash pop" : "stash apply", args, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task DropAsync(int index, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("stash drop", ["stash", "drop", $"stash@{{{index}}}"], cancellationToken);
+
+    public async Task<IReadOnlyList<FileChange>> GetChangesAsync(int index, CancellationToken cancellationToken = default)
+    {
+        var r = await ctx.RunAsync(["stash", "show", "--name-status", "-M", "--include-untracked", $"stash@{{{index}}}"], cancellationToken).ConfigureAwait(false);
+        return ParseNameStatus(r.EnsureSuccess("stash show").StandardOutput);
+    }
+
+    internal static IReadOnlyList<FileChange> ParseNameStatus(string output)
+    {
+        var list = new List<FileChange>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = line.TrimEnd('\r').Split('\t');
+            if (parts.Length < 2 || parts[0].Length == 0) continue;
+            var kind = parts[0][0] switch
+            {
+                'A' => FileChangeKind.Added,
+                'D' => FileChangeKind.Deleted,
+                'R' => FileChangeKind.Renamed,
+                'C' => FileChangeKind.Copied,
+                'T' => FileChangeKind.TypeChanged,
+                'U' => FileChangeKind.Conflicted,
+                _ => FileChangeKind.Modified,
+            };
+            list.Add(parts.Length >= 3 ? new FileChange(parts[2], parts[1], kind) : new FileChange(parts[1], null, kind));
+        }
+
+        return list;
+    }
+}
+
+internal sealed class HistoryOperations(RepoContext ctx) : IHistoryOperations
+{
+    /// <summary>Accept default messages (merge, squash, continue) without opening an editor.</summary>
+    private static readonly Dictionary<string, string> NoEditor = new() { ["GIT_EDITOR"] = "true" };
+
+    public Task MergeAsync(string branch, bool noFastForward, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("merge", noFastForward
+            ? ["merge", "--no-ff", "--no-edit", BranchOperations.Guard(branch)]
+            : ["merge", "--no-edit", BranchOperations.Guard(branch)], cancellationToken);
+
+    public Task RebaseOntoAsync(string upstream, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("rebase", ["rebase", BranchOperations.Guard(upstream)], cancellationToken, env: NoEditor);
+
+    public Task CherryPickAsync(IReadOnlyList<string> shas, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("cherry-pick", ["cherry-pick", .. shas.Select(BranchOperations.Guard)], cancellationToken, env: NoEditor);
+
+    public async Task RevertAsync(string sha, CancellationToken cancellationToken = default)
+    {
+        var isMerge = await ctx.Lib.RunAsync(r => LibGit2Sharp.RepositoryExtensions.Lookup<LibGit2Sharp.Commit>(r, sha)?.Parents.Count() > 1, cancellationToken).ConfigureAwait(false);
+        await ctx.WriteAsync("revert", isMerge
+            ? ["revert", "--no-edit", "-m", "1", BranchOperations.Guard(sha)]
+            : ["revert", "--no-edit", BranchOperations.Guard(sha)], cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task ResetAsync(string target, ResetMode mode, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("reset", ["reset", $"--{mode.ToString().ToLowerInvariant()}", BranchOperations.Guard(target), "--"], cancellationToken);
+
+    public async Task<IReadOnlyList<RebaseTodoItem>> GetRebasePlanAsync(string baseSha, CancellationToken cancellationToken = default)
+    {
+        var r = await ctx.RunAsync(["log", "--reverse", "--no-merges", "--format=%H%x1f%s", $"{BranchOperations.Guard(baseSha)}..HEAD", "--"], cancellationToken).ConfigureAwait(false);
+        return r.EnsureSuccess("log").StandardOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Split('\x1f'))
+            .Where(p => p.Length == 2)
+            .Select(p => new RebaseTodoItem(p[0], p[1]))
+            .ToList();
+    }
+
+    public async Task<GitResult> RunInteractiveRebaseAsync(string baseSha, IReadOnlyList<RebaseTodoItem> plan, CancellationToken cancellationToken = default)
+    {
+        var workDir = Directory.CreateTempSubdirectory("gitforge-rebase-");
+        try
+        {
+            var todo = RebaseTodoWriter.Write(plan, item =>
+            {
+                var file = Path.Combine(workDir.FullName, $"msg-{item.ShortSha}.txt");
+                File.WriteAllText(file, item.NewMessage);
+                return file;
+            });
+            var todoPath = Path.Combine(workDir.FullName, "git-rebase-todo");
+            await File.WriteAllTextAsync(todoPath, todo, cancellationToken).ConfigureAwait(false);
+
+            // git appends the todo path it wants edited; we overwrite it with the visual plan.
+            var env = new Dictionary<string, string>
+            {
+                ["GIT_SEQUENCE_EDITOR"] = $"cp {RebaseTodoWriter.ShellQuote(todoPath)}",
+                ["GIT_EDITOR"] = "true",
+            };
+            return await ctx.TryWriteAsync(["rebase", "-i", BranchOperations.Guard(baseSha)], cancellationToken, env: env).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Reword message files are read by "exec" lines; keep them while a rebase is stopped mid-way.
+            var inProgress = Directory.Exists(Path.Combine(ctx.GitDir, "rebase-merge"));
+            if (!inProgress) TryDelete(workDir);
+        }
+    }
+
+    public Task<GitResult> ContinueAsync(CancellationToken cancellationToken = default) => SequencerAsync("--continue", cancellationToken);
+
+    public Task<GitResult> AbortAsync(CancellationToken cancellationToken = default) => SequencerAsync("--abort", cancellationToken);
+
+    public Task<GitResult> SkipAsync(CancellationToken cancellationToken = default) => SequencerAsync("--skip", cancellationToken);
+
+    private async Task<GitResult> SequencerAsync(string verb, CancellationToken ct)
+    {
+        var op = await ctx.Lib.RunAsync(r => RepositoryReader.MapOperation(r.Info.CurrentOperation), ct).ConfigureAwait(false);
+        var command = op switch
+        {
+            RepositoryOperation.Merge => "merge",
+            RepositoryOperation.CherryPick => "cherry-pick",
+            RepositoryOperation.Revert => "revert",
+            RepositoryOperation.Rebase or RepositoryOperation.RebaseInteractive => "rebase",
+            RepositoryOperation.ApplyMailbox => "am",
+            _ => throw new InvalidOperationException("No merge, rebase, cherry-pick, or revert is in progress."),
+        };
+        if (command == "merge" && verb == "--skip") throw new InvalidOperationException("A merge cannot be skipped; abort it instead.");
+        return await ctx.TryWriteAsync([command, verb], ct, env: NoEditor).ConfigureAwait(false);
+    }
+
+    private static void TryDelete(DirectoryInfo dir)
+    {
+        try
+        {
+            dir.Delete(recursive: true);
+        }
+        catch (IOException)
+        {
+            // Best effort; the OS temp cleaner will remove it.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+}
+
+internal sealed class SubmoduleOperations(RepoContext ctx) : ISubmoduleOperations
+{
+    public Task UpdateAsync(bool init, bool recursive, IProgress<string>? progress, CancellationToken cancellationToken = default)
+    {
+        var args = new List<string> { "submodule", "update", "--progress" };
+        if (init) args.Add("--init");
+        if (recursive) args.Add("--recursive");
+        return ctx.WriteAsync("submodule update", args, cancellationToken, progress: progress);
+    }
+
+    public Task SyncAsync(bool recursive, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("submodule sync", recursive ? ["submodule", "sync", "--recursive"] : ["submodule", "sync"], cancellationToken);
+}

@@ -1,0 +1,21 @@
+<div class="gf-side-section">
+    <button class="gf-side-title gf-side-toggle" @onclick="Toggle" aria-expanded="@Expanded">
+        <MudIcon Icon="@(Expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+        <span>@Title</span>
+        <span class="gf-count">@Count</span>
+    </button>
+    @if (Expanded)
+    {
+        @ChildContent
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter] public int Count { get; set; }
+    [Parameter] public bool Expanded { get; set; }
+    [Parameter] public EventCallback<bool> ExpandedChanged { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private Task Toggle() => ExpandedChanged.InvokeAsync(!Expanded);
+}

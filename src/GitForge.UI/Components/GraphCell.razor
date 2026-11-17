@@ -1,0 +1,22 @@
+@* One row of the commit graph. Pure SVG; geometry comes from GitForge.Core so every renderer draws identically. *@
+<svg class="gf-graph" width="@Geometry.Width(Row.LaneCount).ToString(CultureInfo.InvariantCulture)" height="@Geometry.RowHeight.ToString(CultureInfo.InvariantCulture)" aria-hidden="true">
+    @foreach (var e in Row.Edges)
+    {
+        <path d="@Geometry.PathFor(e, Row.NodeLane)" stroke="@Color(e.ColorIndex)" />
+    }
+    <circle cx="@Geometry.X(Row.NodeLane).ToString(CultureInfo.InvariantCulture)"
+            cy="@((Geometry.RowHeight / 2).ToString(CultureInfo.InvariantCulture))"
+            r="@Geometry.NodeRadius.ToString(CultureInfo.InvariantCulture)"
+            class="@(Row.Commit.IsMerge ? "merge" : null)"
+            stroke="@Color(Row.NodeColorIndex)"
+            fill="@(IsHead ? "var(--mud-palette-surface)" : Color(Row.NodeColorIndex))" />
+</svg>
+
+@code {
+    public static readonly GraphGeometry Geometry = new();
+
+    [Parameter, EditorRequired] public GraphRow Row { get; set; } = default!;
+    [Parameter] public bool IsHead { get; set; }
+
+    private static string Color(int index) => GitForgeTheme.LaneColors[index % GitForgeTheme.LaneColors.Length];
+}

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <title>GitForge (dev host)</title>
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link href="_content/GitForge.UI/gitforge.css" rel="stylesheet" />
+    <HeadOutlet @rendermode="RenderMode" />
+</head>
+<body>
+    <Routes @rendermode="RenderMode" />
+    <script src="_framework/blazor.web.js"></script>
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <script src="_content/GitForge.UI/gitforge.js"></script>
+</body>
+</html>
+
+@code {
+    // No prerendering: the app talks to git and JS interop as soon as it initializes.
+    private static readonly IComponentRenderMode RenderMode = new InteractiveServerRenderMode(prerender: false);
+}

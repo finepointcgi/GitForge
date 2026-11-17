@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>GitForge.Core</RootNamespace>
+    <Description>Domain models, abstractions, commit-graph layout, and diff/patch engine. No I/O dependencies.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="GitForge.Core.Tests" />
+  </ItemGroup>
+</Project>

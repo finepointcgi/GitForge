@@ -1,0 +1,253 @@
+@implements IDisposable
+@inject RepoWorkspace W
+@inject ISettingsStore SettingsStore
+@inject ShortcutService Shortcuts
+@inject IJSRuntime JS
+
+<div class="gf-diff @(HasFocus ? "focused" : null)">
+    <div class="gf-pane-toolbar">
+        <span class="gf-mono gf-ellipsis gf-grow" title="@Title">@Title</span>
+        @if (Diff is not null)
+        {
+            <span class="gf-diffstat"><span class="add">+@Diff.Additions</span> <span class="del">−@Diff.Deletions</span></span>
+        }
+        @if (CanSelectLines && _selection.Count > 0)
+        {
+            <span class="gf-dim">@_selection.Count selected</span>
+            @if (Area == StagingArea.Unstaged)
+            {
+                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => Apply(PatchAction.Stage, _selection))">Stage lines (s)</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => Apply(PatchAction.Discard, _selection))">Discard lines (d)</MudButton>
+            }
+            else if (Area == StagingArea.Staged)
+            {
+                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => Apply(PatchAction.Unstage, _selection))">Unstage lines (u)</MudButton>
+            }
+            <MudIconButton Icon="@Icons.Material.Outlined.Clear" Size="Size.Small" OnClick="ClearSelection" aria-label="Clear selection" />
+        }
+        <MudTooltip Text="@(W.Settings.SideBySideDiff ? "Inline view" : "Side-by-side view")">
+            <MudIconButton Icon="@(W.Settings.SideBySideDiff ? Icons.Material.Outlined.ViewStream : Icons.Material.Outlined.VerticalSplit)" Size="Size.Small" OnClick="ToggleSideBySide" aria-label="Toggle inline or side-by-side diff" />
+        </MudTooltip>
+        <MudTooltip Text="@(W.Settings.IgnoreWhitespace ? "Show whitespace changes" : "Ignore whitespace changes (disables line staging)")">
+            <MudToggleIconButton Toggled="W.Settings.IgnoreWhitespace" ToggledChanged="ToggleWhitespace" Icon="@Icons.Material.Outlined.SpaceBar" ToggledIcon="@Icons.Material.Filled.SpaceBar" ToggledColor="Color.Primary" Size="Size.Small" aria-label="Ignore whitespace changes" />
+        </MudTooltip>
+    </div>
+
+    @if (Loading)
+    {
+        <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+    }
+    else if (Diff is null)
+    {
+        <div class="gf-empty">@(Placeholder ?? "No changes to show")</div>
+    }
+    else if (Diff.IsBinary)
+    {
+        <div class="gf-empty">Binary file — no text diff.</div>
+    }
+    else if (Diff.LineCount > LargeDiffLines && !_forceLarge)
+    {
+        <div class="gf-empty">
+            Large diff (@Diff.LineCount.ToString("N0", CultureInfo.CurrentCulture) lines).
+            <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => _forceLarge = true)">Render anyway</MudButton>
+        </div>
+    }
+    else if (W.Settings.SideBySideDiff)
+    {
+        <div class="gf-scroll gf-code" @ref="_scroller">
+            <Virtualize Items="_sideRows" ItemSize="20" OverscanCount="40" Context="r">
+                @if (r.IsHunkHeader)
+                {
+                    <HunkHeader Hunk="r.Hunk" Area="Area" CanApply="CanSelectLines" OnApply="ApplyHunk" />
+                }
+                else
+                {
+                    <div class="gf-diff-row sbs">
+                        <span class="ln">@r.Left?.OldLineNumber</span>
+                        <span class="code @Css(r.Left) @(IsSelected(r.HunkIndex, r.LeftLineIndex) ? "sel" : null)" @onclick="@(e => Toggle(r.HunkIndex, r.LeftLineIndex, r.Left, e.ShiftKey))">@r.Left?.DisplayText</span>
+                        <span class="ln">@r.Right?.NewLineNumber</span>
+                        <span class="code @Css(r.Right) @(IsSelected(r.HunkIndex, r.RightLineIndex) ? "sel" : null)" @onclick="@(e => Toggle(r.HunkIndex, r.RightLineIndex, r.Right, e.ShiftKey))">@r.Right?.DisplayText</span>
+                    </div>
+                }
+            </Virtualize>
+        </div>
+    }
+    else
+    {
+        <div class="gf-scroll gf-code" @ref="_scroller">
+            <Virtualize Items="_rows" ItemSize="20" OverscanCount="40" Context="r">
+                @if (r.IsHunkHeader)
+                {
+                    <HunkHeader Hunk="r.Hunk" Area="Area" CanApply="CanSelectLines" OnApply="ApplyHunk" />
+                }
+                else
+                {
+                    <div class="gf-diff-row @Css(r.Line) @(IsSelected(r.HunkIndex, r.LineIndex) ? "sel" : null) @(r.RowIndex == _cursor ? "cursor" : null)"
+                         @onclick="@(e => ClickRow(r, e.ShiftKey))">
+                        <span class="ln">@r.Line!.OldLineNumber</span>
+                        <span class="ln">@r.Line.NewLineNumber</span>
+                        <span class="sign">@Sign(r.Line)</span>
+                        <span class="code">@r.Line.DisplayText</span>
+                        @if (r.Line.NoNewlineAtEnd)
+                        {
+                            <span class="gf-dim gf-small"> ⏎̸ no newline at end of file</span>
+                        }
+                    </div>
+                }
+            </Virtualize>
+        </div>
+    }
+</div>
+
+@code {
+    private const int LargeDiffLines = 25_000;
+
+    [Parameter] public FileDiff? Diff { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+
+    /// <summary>Set for working-copy diffs; enables hunk and line actions.</summary>
+    [Parameter] public StagingArea? Area { get; set; }
+
+    [Parameter] public bool HasFocus { get; set; }
+    [Parameter] public EventCallback<(IReadOnlySet<LineRef> Lines, PatchAction Action)> OnApply { get; set; }
+    [Parameter] public EventCallback OnReload { get; set; }
+
+    private FileDiff? _rendered;
+    private List<DiffRow> _rows = [];
+    private List<SideBySideRow> _sideRows = [];
+    private readonly HashSet<LineRef> _selection = [];
+    private ElementReference _scroller;
+    private bool _forceLarge;
+    private int _cursor = -1;
+    private int _anchor = -1;
+
+    private bool CanSelectLines => Area is not null && Diff?.SupportsPartialStaging == true && !W.Settings.IgnoreWhitespace;
+
+    protected override void OnInitialized() => Shortcuts.Command += OnCommand;
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(Diff, _rendered)) return;
+        _rendered = Diff;
+        _selection.Clear();
+        _forceLarge = false;
+        _cursor = -1;
+        _anchor = -1;
+        _rows = Diff is null ? [] : DiffLayout.Inline(Diff).ToList();
+        _sideRows = Diff is null ? [] : DiffLayout.SideBySide(Diff).ToList();
+    }
+
+    private static string? Css(DiffLine? l) => l?.Kind switch
+    {
+        DiffLineKind.Added => "add",
+        DiffLineKind.Deleted => "del",
+        null => "pad",
+        _ => null,
+    };
+
+    private static string Sign(DiffLine l) => l.Kind switch { DiffLineKind.Added => "+", DiffLineKind.Deleted => "−", _ => " " };
+
+    private bool IsSelected(int hunk, int line) => line >= 0 && _selection.Contains(new LineRef(hunk, line));
+
+    private void ClickRow(DiffRow row, bool shift)
+    {
+        _cursor = row.RowIndex;
+        if (!CanSelectLines || row.Line is not { IsChange: true }) return;
+
+        if (shift && _anchor >= 0)
+        {
+            var (from, to) = (Math.Min(_anchor, row.RowIndex), Math.Max(_anchor, row.RowIndex));
+            for (var i = from; i <= to; i++)
+            {
+                if (_rows[i].Line is { IsChange: true }) _selection.Add(new LineRef(_rows[i].HunkIndex, _rows[i].LineIndex));
+            }
+        }
+        else
+        {
+            ToggleRef(new LineRef(row.HunkIndex, row.LineIndex));
+            _anchor = row.RowIndex;
+        }
+    }
+
+    private void Toggle(int hunk, int line, DiffLine? l, bool shift)
+    {
+        if (!CanSelectLines || l is not { IsChange: true }) return;
+        ToggleRef(new LineRef(hunk, line));
+    }
+
+    private void ToggleRef(LineRef r)
+    {
+        if (!_selection.Remove(r)) _selection.Add(r);
+    }
+
+    private void ClearSelection()
+    {
+        _selection.Clear();
+        _anchor = -1;
+    }
+
+    private Task ApplyHunk((DiffHunk Hunk, PatchAction Action) e) => Apply(e.Action, PatchBuilder.SelectHunk(e.Hunk));
+
+    private async Task Apply(PatchAction action, IReadOnlySet<LineRef> lines)
+    {
+        if (lines.Count == 0) return;
+        var copy = new HashSet<LineRef>(lines);
+        ClearSelection();
+        await OnApply.InvokeAsync((copy, action));
+    }
+
+    private Task ToggleSideBySide() => SettingsStore.UpdateAsync(s => s with { SideBySideDiff = !s.SideBySideDiff });
+
+    private async Task ToggleWhitespace(bool value)
+    {
+        await SettingsStore.UpdateAsync(s => s with { IgnoreWhitespace = value });
+        await OnReload.InvokeAsync();
+    }
+
+    private async Task OnCommand(string command)
+    {
+        if (!HasFocus || Diff is null || W.Settings.SideBySideDiff) return;
+        switch (command)
+        {
+            case "nav.down": await MoveCursor(+1); break;
+            case "nav.up": await MoveCursor(-1); break;
+            case "nav.top": await MoveCursor(-_rows.Count); break;
+            case "nav.bottom": await MoveCursor(_rows.Count); break;
+            case "item.toggle" when _cursor >= 0 && _cursor < _rows.Count:
+                ClickRow(_rows[_cursor], shift: false);
+                StateHasChanged();
+                break;
+            case "item.stage" when Area == StagingArea.Unstaged: await ApplySelectionOrHunk(PatchAction.Stage); break;
+            case "item.unstage" when Area == StagingArea.Staged: await ApplySelectionOrHunk(PatchAction.Unstage); break;
+            case "item.discard" when Area == StagingArea.Unstaged: await ApplySelectionOrHunk(PatchAction.Discard); break;
+        }
+    }
+
+    /// <summary>With no explicit selection, keyboard actions apply to the hunk under the cursor.</summary>
+    private async Task ApplySelectionOrHunk(PatchAction action)
+    {
+        if (!CanSelectLines) return;
+        if (_selection.Count > 0)
+        {
+            await Apply(action, _selection);
+        }
+        else if (_cursor >= 0 && _cursor < _rows.Count)
+        {
+            await Apply(action, PatchBuilder.SelectHunk(_rows[_cursor].Hunk));
+        }
+    }
+
+    private async Task MoveCursor(int delta)
+    {
+        if (_rows.Count == 0) return;
+        _cursor = Math.Clamp(_cursor + delta, 0, _rows.Count - 1);
+        // Skip hunk headers when stepping one line at a time.
+        if (Math.Abs(delta) == 1 && _rows[_cursor].IsHunkHeader && _cursor + delta >= 0 && _cursor + delta < _rows.Count) _cursor += delta;
+        StateHasChanged();
+        await JS.InvokeVoidAsync("gitforge.scrollRowIntoView", _scroller, _cursor, 20);
+    }
+
+    public void Dispose() => Shortcuts.Command -= OnCommand;
+}

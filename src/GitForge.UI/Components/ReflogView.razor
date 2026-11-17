@@ -1,0 +1,100 @@
+@inject RepoWorkspace W
+@inject IDialogService Dialogs
+
+<div class="gf-pane gf-reflog">
+    <div class="gf-pane-toolbar">
+        <span class="gf-group-title">Reflog — HEAD</span>
+        <span class="gf-dim gf-small">Every position HEAD has pointed to. Use it to recover lost commits after a reset, rebase, or deleted branch.</span>
+        <span class="gf-spacer"></span>
+        <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="FindDangling" Disabled="_scanning">@(_scanning ? "Scanning…" : "Find dangling commits")</MudButton>
+        <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small" OnClick="LoadAsync" aria-label="Reload reflog" />
+    </div>
+
+    @if (_dangling is { } dangling)
+    {
+        <div class="gf-dangling">
+            <div class="gf-group-head"><span class="gf-group-title">Unreachable commits</span><span class="gf-count">@dangling.Count</span></div>
+            @if (dangling.Count == 0)
+            {
+                <div class="gf-empty gf-small">No dangling commits found.</div>
+            }
+            @foreach (var sha in dangling.Take(200))
+            {
+                <div class="gf-file-row">
+                    <span class="gf-mono">@sha[..10]</span>
+                    <span class="gf-spacer"></span>
+                    <button class="gf-link-button" @onclick="@(() => Recover(sha))">Create branch…</button>
+                </div>
+            }
+        </div>
+    }
+
+    <div class="gf-scroll">
+        <table class="gf-table">
+            <thead><tr><th>Entry</th><th>Commit</th><th>Action</th><th>When</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var e in _entries)
+                {
+                    <tr>
+                        <td class="gf-mono gf-dim">@($"HEAD@{{{e.Index}}}")</td>
+                        <td class="gf-mono">@Short(e.ToSha)</td>
+                        <td class="gf-ellipsis" title="@e.Message">@e.Message</td>
+                        <td class="gf-dim gf-nowrap">@e.When.LocalDateTime.ToString("g", CultureInfo.CurrentCulture)</td>
+                        <td class="gf-nowrap">
+                            <button class="gf-link-button" @onclick="@(() => Recover(e.ToSha))">Branch…</button>
+                            <button class="gf-link-button" @onclick="@(() => W.RunAsync("Checking out", (r, _) => r.Branches.CheckoutAsync(e.ToSha)))">Checkout</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<ReflogEntryInfo> _entries = [];
+    private IReadOnlyList<string>? _dangling;
+    private bool _scanning;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private static string Short(string sha) => sha.Length > 10 ? sha[..10] : sha;
+
+    private async Task LoadAsync()
+    {
+        if (W.Repo is not { } repo) return;
+        try
+        {
+            _entries = await Task.Run(() => repo.Read.GetReflogAsync());
+        }
+        catch (Exception ex)
+        {
+            W.Error("Load reflog", ex);
+        }
+    }
+
+    private async Task FindDangling()
+    {
+        if (W.Repo is not { } repo) return;
+        _scanning = true;
+        try
+        {
+            _dangling = await Task.Run(() => repo.Read.GetUnreachableCommitsAsync());
+        }
+        catch (Exception ex)
+        {
+            W.Error("Scan for dangling commits", ex);
+        }
+        finally
+        {
+            _scanning = false;
+        }
+    }
+
+    private async Task Recover(string sha)
+    {
+        var name = await TextPromptDialog.ShowAsync(Dialogs, $"Recover {Short(sha)}", "New branch name", $"recovered-{sha[..7]}", validateRef: true);
+        if (name is null) return;
+        await W.RunAsync("Creating recovery branch", (r, _) => r.Branches.CreateAsync(name, sha, checkout: false), $"Created {name} at {Short(sha)}");
+    }
+}

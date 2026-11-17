@@ -1,0 +1,174 @@
+@inject RepoWorkspace W
+@inject IGitRepositoryFactory Factory
+@inject IAccountService Accounts
+@inject IPlatformShell Shell
+@inject ISettingsStore SettingsStore
+
+<MudDialog>
+    <DialogContent>
+        @if (Accounts.Accounts.Count > 0)
+        {
+            <div class="gf-dialog-row">
+                <MudSelect T="Guid?" Value="_accountId" ValueChanged="LoadRepositories" Label="Browse an account" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true" Class="gf-grow">
+                    @foreach (var a in Accounts.Accounts)
+                    {
+                        <MudSelectItem T="Guid?" Value="@a.Id">@a.DisplayName (@a.Provider)</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudTextField T="string" @bind-Value="_repoFilter" Placeholder="Filter" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            </div>
+            @if (_loadingRepos)
+            {
+                <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+            }
+            @if (_repos.Count > 0)
+            {
+                <div class="gf-list gf-dialog-list">
+                    @foreach (var r in _repos.Where(r => string.IsNullOrWhiteSpace(_repoFilter) || r.FullName.Contains(_repoFilter, StringComparison.OrdinalIgnoreCase)).Take(500))
+                    {
+                        <div class="gf-file-row @(r.CloneUrlHttps == _url ? "selected" : null)" @onclick="@(() => Pick(r))" title="@r.Description">
+                            <MudIcon Icon="@(r.IsPrivate ? Icons.Material.Outlined.Lock : Icons.Material.Outlined.Public)" Size="Size.Small" />
+                            <span class="gf-filename gf-ellipsis gf-grow">@r.FullName</span>
+                            <span class="gf-dim gf-small">@r.UpdatedAt?.LocalDateTime.ToString("d", CultureInfo.CurrentCulture)</span>
+                        </div>
+                    }
+                </div>
+            }
+        }
+        else
+        {
+            <p class="gf-dim gf-small">Tip: add a GitHub, GitLab, Bitbucket, or Azure DevOps account (toolbar → accounts) to browse your repositories here.</p>
+        }
+
+        <MudTextField T="string" @bind-Value="_url" Label="Repository URL (HTTPS or SSH)" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" Class="gf-mt" />
+        <div class="gf-dialog-row">
+            <MudTextField T="string" @bind-Value="_parent" Label="Clone into folder" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" Class="gf-grow" />
+            @if (Shell.CanPickFolder)
+            {
+                <MudButton Variant="Variant.Outlined" OnClick="Browse">Browse…</MudButton>
+            }
+        </div>
+        <MudTextField T="string" @bind-Value="_name" Label="Folder name" Placeholder="@DefaultName" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        <MudCheckBox T="bool" @bind-Value="_recurse" Label="Recurse submodules" Size="Size.Small" Dense="true" />
+        @if (_progress is not null)
+        {
+            <div class="gf-mono gf-small gf-dim gf-ellipsis">@_progress</div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(_cloning || string.IsNullOrWhiteSpace(_url))" OnClick="Clone">@(_cloning ? "Cloning…" : "Clone")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    private Guid? _accountId;
+    private List<HostedRepository> _repos = [];
+    private bool _loadingRepos, _cloning, _recurse = true;
+    private string _url = string.Empty, _parent = string.Empty, _name = string.Empty, _repoFilter = string.Empty;
+    private string? _progress;
+    private CancellationTokenSource? _cts;
+
+    private string DefaultName
+    {
+        get
+        {
+            var trimmed = _url.Trim().TrimEnd('/');
+            var last = trimmed[(Math.Max(trimmed.LastIndexOf('/'), trimmed.LastIndexOf(':')) + 1)..];
+            return last.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? last[..^4] : last;
+        }
+    }
+
+    protected override void OnInitialized() =>
+        _parent = W.Settings.DefaultCloneDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "source", "repos");
+
+    private async Task LoadRepositories(Guid? id)
+    {
+        _accountId = id;
+        _repos.Clear();
+        var account = Accounts.Accounts.FirstOrDefault(a => a.Id == id);
+        if (account is null) return;
+
+        _loadingRepos = true;
+        try
+        {
+            var token = await Accounts.GetTokenAsync(account) ?? throw new InvalidOperationException("Token not found in the keyring. Re-add the account.");
+            await foreach (var r in Accounts.GetProvider(account.Provider).ListRepositoriesAsync(account, token))
+            {
+                _repos.Add(r);
+                if (_repos.Count % 100 == 0) StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            W.Error("List repositories", ex);
+        }
+        finally
+        {
+            _loadingRepos = false;
+        }
+    }
+
+    private void Pick(HostedRepository r)
+    {
+        _url = r.CloneUrlHttps;
+        _name = string.Empty;
+    }
+
+    private async Task Browse()
+    {
+        var folder = await Shell.PickFolderAsync(_parent);
+        if (folder is not null) _parent = folder;
+    }
+
+    private async Task Clone()
+    {
+        var name = string.IsNullOrWhiteSpace(_name) ? DefaultName : _name.Trim();
+        if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            W.Info("Enter a valid folder name.", Severity.Warning);
+            return;
+        }
+
+        var destination = Path.Combine(_parent.Trim(), name);
+        if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any())
+        {
+            W.Info($"'{destination}' already exists and is not empty.", Severity.Warning);
+            return;
+        }
+
+        _cloning = true;
+        _cts = new CancellationTokenSource();
+        var progress = new Progress<string>(line =>
+        {
+            _progress = line;
+            StateHasChanged();
+        });
+        try
+        {
+            var path = await Factory.CloneAsync(_url.Trim(), destination, _recurse, progress, _cts.Token);
+            await SettingsStore.UpdateAsync(s => s with { DefaultCloneDirectory = _parent.Trim() });
+            Dialog.Close();
+            await W.OpenAsync(path);
+        }
+        catch (OperationCanceledException)
+        {
+            _progress = "Canceled.";
+        }
+        catch (Exception ex)
+        {
+            W.Error("Clone", ex);
+        }
+        finally
+        {
+            _cloning = false;
+        }
+    }
+
+    private void Cancel()
+    {
+        _cts?.Cancel();
+        Dialog.Cancel();
+    }
+}

@@ -1,0 +1,261 @@
+@implements IAsyncDisposable
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+@inject IJSRuntime JS
+@inject IDialogService Dialogs
+
+<div class="gf-split-y" id="gf-history">
+    <section class="gf-pane">
+        <div class="gf-pane-toolbar">
+            <MudIcon Icon="@Icons.Material.Outlined.Search" Size="Size.Small" Class="gf-dim" />
+            <input @ref="_search" class="gf-input gf-grow" placeholder="Filter: text · sha · author:name · path:src/file · since:2025-01-01 · until:2025-12-31"
+                   value="@_query" @oninput="OnQueryInput" aria-label="Filter history" />
+            @if (_filterBusy)
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+            }
+            <span class="gf-dim gf-nowrap">@CountText</span>
+        </div>
+        <div class="gf-grid-head gf-history-grid" style="--gf-graph-w:@(GraphWidth)px">
+            <span>Graph</span><span>Description</span><span>Date</span><span>Author</span><span>Commit</span>
+        </div>
+        <div class="gf-scroll" @ref="_scroller" tabindex="0">
+            <Virtualize @ref="_virtualize" TItem="HistoryItem" ItemsProvider="ProvideAsync" ItemSize="26" OverscanCount="15">
+                <ItemContent Context="item">
+                    <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
+                        <ActivatorContent Context="menu">
+                            <div @oncontextmenu="@(e => menu.OpenAsync(e))" class="gf-row gf-history-grid @(item.Index == _selected ? "selected" : null)" style="--gf-graph-w:@(GraphWidth)px"
+                                 @onclick="@(() => Select(item.Index))">
+                                <span class="gf-graph-cell">
+                                    @if (!Filtered)
+                                    {
+                                        <GraphCell Row="item.Row" IsHead="@(item.Row.Commit.Sha == W.Snapshot?.HeadSha)" />
+                                    }
+                                </span>
+                                <span class="gf-ellipsis">
+                                    <RefBadges Labels="@Labels(item.Row.Commit.Sha)" />
+                                    <span class="@(item.Row.Commit.IsMerge ? "gf-dim" : null)">@item.Row.Commit.Subject</span>
+                                </span>
+                                <span class="gf-dim gf-nowrap">@item.Row.Commit.AuthorDate.LocalDateTime.ToString("g", CultureInfo.CurrentCulture)</span>
+                                <span class="gf-dim gf-ellipsis" title="@item.Row.Commit.AuthorEmail">@item.Row.Commit.AuthorName</span>
+                                <span class="gf-mono gf-dim">@item.Row.Commit.ShortSha</span>
+                            </div>
+                        </ActivatorContent>
+                        <ChildContent>
+                            <CommitMenu Commit="item.Row.Commit" />
+                        </ChildContent>
+                    </MudMenu>
+                </ItemContent>
+                <Placeholder Context="ph">
+                    <div class="gf-row gf-placeholder"></div>
+                </Placeholder>
+            </Virtualize>
+        </div>
+    </section>
+    <div class="gf-splitter gf-splitter-y" data-var="--gf-details-h" data-target="gf-history" data-invert="1" data-min="120" data-max="1200"></div>
+    <section class="gf-pane">
+        <CommitDetailsPanel Sha="@W.SelectedCommitSha" />
+    </section>
+</div>
+
+@code {
+    private readonly record struct HistoryItem(int Index, GraphRow Row);
+
+    private Virtualize<HistoryItem>? _virtualize;
+    private ElementReference _scroller;
+    private ElementReference _search;
+    private string _query = string.Empty;
+    private int[]? _filtered;
+    private bool _filterBusy;
+    private int _selected = -1;
+    private int _maxLanes = 1;
+    private int _lanesScanned;
+    private CancellationTokenSource? _filterCts;
+    private readonly Dictionary<string, HashSet<string>> _pathCache = new(StringComparer.Ordinal);
+
+    private bool Filtered => _filtered is not null;
+    private int VisibleCount => _filtered?.Length ?? W.Rows.Count;
+    private int GraphWidth => Filtered ? 8 : (int)Math.Min(GraphCell.Geometry.Width(_maxLanes) + 6, 300);
+
+    private string CountText => Filtered
+        ? $"{_filtered!.Length.ToString("N0", CultureInfo.CurrentCulture)} of {W.Rows.Count.ToString("N0", CultureInfo.CurrentCulture)}"
+        : $"{W.Rows.Count.ToString("N0", CultureInfo.CurrentCulture)} commits{(W.HistoryLoading ? "…" : string.Empty)}";
+
+    protected override void OnInitialized()
+    {
+        W.HistoryChanged += OnHistoryChanged;
+        W.Changed += OnChanged;
+        Shortcuts.Command += OnCommand;
+        ScanLanes();
+        if (W.SelectedCommitSha is { } sha) _selected = IndexOf(sha);
+        else if (W.Rows.Count > 0) _ = Select(0, scroll: false);
+    }
+
+    private IReadOnlyList<RefLabel>? Labels(string sha) => W.RefIndex.TryGetValue(sha, out var l) ? l : null;
+
+    private ValueTask<ItemsProviderResult<HistoryItem>> ProvideAsync(ItemsProviderRequest request)
+    {
+        var rows = W.Rows;
+        var filtered = _filtered;
+        var total = filtered?.Length ?? rows.Count;
+        var end = Math.Min(total, request.StartIndex + request.Count);
+        var items = new List<HistoryItem>(Math.Max(0, end - request.StartIndex));
+        for (var i = request.StartIndex; i < end; i++)
+        {
+            var rowIndex = filtered is null ? i : filtered[i];
+            if (rowIndex < rows.Count) items.Add(new HistoryItem(i, rows[rowIndex]));
+        }
+
+        return ValueTask.FromResult(new ItemsProviderResult<HistoryItem>(items, total));
+    }
+
+    private GraphRow? RowAt(int displayIndex)
+    {
+        if (displayIndex < 0 || displayIndex >= VisibleCount) return null;
+        var i = _filtered is null ? displayIndex : _filtered[displayIndex];
+        return i < W.Rows.Count ? W.Rows[i] : null;
+    }
+
+    private int IndexOf(string sha)
+    {
+        for (var i = 0; i < VisibleCount; i++)
+        {
+            if (RowAt(i)?.Commit.Sha == sha) return i;
+        }
+
+        return -1;
+    }
+
+    private async Task Select(int index, bool scroll = true)
+    {
+        var row = RowAt(index);
+        if (row is null) return;
+        _selected = index;
+        W.SelectedCommitSha = row.Commit.Sha;
+        W.Notify();
+        if (scroll) await JS.InvokeVoidAsync("gitforge.scrollRowIntoView", _scroller, index, 26);
+    }
+
+    private void ScanLanes()
+    {
+        var rows = W.Rows;
+        if (_lanesScanned > rows.Count) _lanesScanned = 0;
+        for (var i = _lanesScanned; i < rows.Count; i++) _maxLanes = Math.Max(_maxLanes, rows[i].LaneCount);
+        _lanesScanned = rows.Count;
+    }
+
+    private void OnHistoryChanged() => _ = InvokeAsync(async () =>
+    {
+        ScanLanes();
+        if (Filtered) await ApplyFilterAsync(_query);
+        if (_selected < 0 && W.Rows.Count > 0) await Select(0, scroll: false);
+        else if (W.SelectedCommitSha is { } sha && RowAt(_selected)?.Commit.Sha != sha) _selected = IndexOf(sha);
+        if (_virtualize is not null) await _virtualize.RefreshDataAsync();
+        StateHasChanged();
+    });
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task OnQueryInput(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? string.Empty;
+        _filterCts?.Cancel();
+        var cts = _filterCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(150, cts.Token); // debounce keystrokes
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+
+        await ApplyFilterAsync(_query);
+        _selected = -1;
+        if (_virtualize is not null) await _virtualize.RefreshDataAsync();
+        if (VisibleCount > 0) await Select(0);
+        StateHasChanged();
+    }
+
+    /// <summary>In-memory filter over loaded rows; <c>path:</c> asks git for the matching commit set once and caches it.</summary>
+    private async Task ApplyFilterAsync(string query)
+    {
+        var f = HistoryFilter.Parse(query);
+        if (f.IsEmpty)
+        {
+            _filtered = null;
+            return;
+        }
+
+        HashSet<string>? pathShas = null;
+        if (f.Path is { } path && W.Repo is { } repo)
+        {
+            if (!_pathCache.TryGetValue(path, out pathShas))
+            {
+                _filterBusy = true;
+                StateHasChanged();
+                pathShas = new HashSet<string>(StringComparer.Ordinal);
+                try
+                {
+                    await foreach (var c in repo.Read.GetHistoryAsync(new HistoryQuery { PathFilter = path }))
+                    {
+                        pathShas.Add(c.Sha);
+                    }
+
+                    _pathCache[path] = pathShas;
+                }
+                catch (Exception ex)
+                {
+                    W.Error("Path filter", ex);
+                }
+                finally
+                {
+                    _filterBusy = false;
+                }
+            }
+        }
+
+        var rows = W.Rows;
+        _filtered = await Task.Run(() =>
+        {
+            var result = new List<int>();
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var c = rows[i].Commit;
+                if (pathShas is not null && !pathShas.Contains(c.Sha)) continue;
+                if (f.Matches(c)) result.Add(i);
+            }
+
+            return result.ToArray();
+        });
+    }
+
+    private async Task OnCommand(string command)
+    {
+        if (W.View != WorkspaceView.History) return;
+        switch (command)
+        {
+            case "nav.down": await Select(Math.Min(_selected + 1, VisibleCount - 1)); break;
+            case "nav.up": await Select(Math.Max(_selected - 1, 0)); break;
+            case "nav.top": await Select(0); break;
+            case "nav.bottom": await Select(VisibleCount - 1); break;
+            case "search.focus": await _search.FocusAsync(); break;
+            case "escape" when _query.Length > 0:
+                _query = string.Empty;
+                _filtered = null;
+                if (_virtualize is not null) await _virtualize.RefreshDataAsync();
+                StateHasChanged();
+                break;
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        W.HistoryChanged -= OnHistoryChanged;
+        W.Changed -= OnChanged;
+        Shortcuts.Command -= OnCommand;
+        _filterCts?.Cancel();
+        _filterCts?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

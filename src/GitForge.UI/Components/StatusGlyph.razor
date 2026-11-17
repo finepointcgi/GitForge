@@ -1,0 +1,27 @@
+<span class="gf-glyph @Css" title="@Kind">@Letter</span>
+
+@code {
+    [Parameter] public FileChangeKind Kind { get; set; }
+
+    private string Letter => Kind switch
+    {
+        FileChangeKind.Added => "A",
+        FileChangeKind.Modified => "M",
+        FileChangeKind.Deleted => "D",
+        FileChangeKind.Renamed => "R",
+        FileChangeKind.Copied => "C",
+        FileChangeKind.TypeChanged => "T",
+        FileChangeKind.Untracked => "?",
+        FileChangeKind.Conflicted => "!",
+        _ => "·",
+    };
+
+    private string Css => Kind switch
+    {
+        FileChangeKind.Added or FileChangeKind.Untracked or FileChangeKind.Copied => "add",
+        FileChangeKind.Deleted => "del",
+        FileChangeKind.Conflicted => "conflict",
+        FileChangeKind.Renamed => "ren",
+        _ => "mod",
+    };
+}

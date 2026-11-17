@@ -1,0 +1,249 @@
+@implements IAsyncDisposable
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+@inject IDialogService Dialogs
+@inject ISettingsStore SettingsStore
+@inject IGitCli Cli
+@inject IJSRuntime JS
+
+<MudThemeProvider @ref="_themeProvider" Theme="_theme" IsDarkMode="_dark" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<div class="gf-shell">
+    <header class="gf-toolbar">
+        <MudMenu Dense="true" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+            <ActivatorContent Context="menu">
+                <button class="gf-repo-button" @onclick="@(e => menu.ToggleAsync(e))" title="Recent repositories">
+                    <MudIcon Icon="@Icons.Material.Outlined.FolderOpen" Size="Size.Small" />
+                    <span class="gf-repo-name">@(W.Repo?.Name ?? "No repository")</span>
+                    <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" />
+                </button>
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem Icon="@Icons.Material.Outlined.FolderOpen" OnClick="@(() => Shortcuts.RaiseAsync("repo.open"))">Open… (Ctrl+O)</MudMenuItem>
+                <MudMenuItem Icon="@Icons.Material.Outlined.CloudDownload" OnClick="@(() => Shortcuts.RaiseAsync("repo.clone"))">Clone… (Ctrl+Shift+O)</MudMenuItem>
+                @if (W.Settings.RecentRepositories.Count > 0)
+                {
+                    <MudDivider />
+                    @foreach (var r in W.Settings.RecentRepositories.Take(12))
+                    {
+                        <MudMenuItem OnClick="@(() => W.OpenAsync(r))"><span class="gf-mono gf-small">@r</span></MudMenuItem>
+                    }
+                }
+            </ChildContent>
+        </MudMenu>
+
+        <div class="gf-toolbar-group">
+            <ToolbarButton Icon="@Icons.Material.Outlined.Edit" Label="Commit" Hint="File status (Ctrl+1)" Active="@(W.View == WorkspaceView.FileStatus)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("view.status"))" Badge="@(W.Status.TotalCount)" />
+            <ToolbarButton Icon="@Icons.Material.Outlined.AccountTree" Label="History" Hint="History graph (Ctrl+2)" Active="@(W.View == WorkspaceView.History)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("view.history"))" />
+            <ToolbarButton Icon="@Icons.Material.Outlined.Restore" Label="Reflog" Hint="Reflog recovery (Ctrl+3)" Active="@(W.View == WorkspaceView.Reflog)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("view.reflog"))" />
+        </div>
+        <div class="gf-toolbar-group">
+            <ToolbarButton Icon="@Icons.Material.Outlined.Sync" Label="Fetch" Hint="Fetch all remotes (Ctrl+Shift+F)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("remote.fetch"))" />
+            <ToolbarButton Icon="@Icons.Material.Outlined.Download" Label="Pull" Hint="Pull (Ctrl+Shift+L)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("remote.pull"))" Badge="@(W.CurrentBranchHead?.Behind ?? 0)" />
+            <ToolbarButton Icon="@Icons.Material.Outlined.Upload" Label="Push" Hint="Push (Ctrl+Shift+P)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("remote.push"))" Badge="@(W.CurrentBranchHead?.Ahead ?? 0)" />
+        </div>
+        <div class="gf-toolbar-group">
+            <ToolbarButton Icon="@Icons.Material.Outlined.CallSplit" Label="Branch" Hint="New branch (Ctrl+B)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("branch.new"))" />
+            <ToolbarButton Icon="@Icons.Material.Outlined.Inventory2" Label="Stash" Hint="Stash changes (Ctrl+Shift+S)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("stash.save"))" />
+            <ToolbarButton Icon="@Icons.Material.Outlined.MergeType" Label="PRs" Hint="Pull / merge requests" Disabled="@NoRepo" OnClick="ShowPullRequests" />
+            <ToolbarButton Icon="@Icons.Material.Outlined.Terminal" Label="Console" Hint="Git console (Ctrl+`)" Active="@W.ConsoleOpen" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("console.toggle"))" />
+        </div>
+
+        <div class="gf-spacer"></div>
+
+        <MudTooltip Text="Hosting accounts">
+            <MudIconButton Icon="@Icons.Material.Outlined.ManageAccounts" Size="Size.Small" OnClick="ShowAccounts" aria-label="Hosting accounts" />
+        </MudTooltip>
+        <MudTooltip Text="Keyboard shortcuts (?)">
+            <MudIconButton Icon="@Icons.Material.Outlined.Keyboard" Size="Size.Small" OnClick="@(() => Shortcuts.RaiseAsync("help.shortcuts"))" aria-label="Keyboard shortcuts" />
+        </MudTooltip>
+        <MudTooltip Text="@(_dark ? "Light theme" : "Dark theme")">
+            <MudIconButton Icon="@(_dark ? Icons.Material.Outlined.LightMode : Icons.Material.Outlined.DarkMode)" Size="Size.Small" OnClick="ToggleTheme" aria-label="Toggle light or dark theme" />
+        </MudTooltip>
+        <MudTooltip Text="Settings">
+            <MudIconButton Icon="@Icons.Material.Outlined.Settings" Size="Size.Small" OnClick="ShowSettings" aria-label="Settings" />
+        </MudTooltip>
+    </header>
+
+    @if (W.IsBusy)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Size="Size.Small" Class="gf-busy-bar" />
+    }
+
+    <OperationBanner />
+
+    <div class="gf-body" id="gf-body">
+        <aside class="gf-sidebar">
+            <Sidebar />
+        </aside>
+        <div class="gf-splitter gf-splitter-x" data-var="--gf-sidebar-w" data-target="gf-body" data-min="180" data-max="600"></div>
+        <main class="gf-main">
+            @if (W.Repo is null)
+            {
+                <WelcomeView />
+            }
+            else
+            {
+                @switch (W.View)
+                {
+                    case WorkspaceView.FileStatus:
+                        <StagingView />
+                        break;
+                    case WorkspaceView.History:
+                        <HistoryView />
+                        break;
+                    case WorkspaceView.Reflog:
+                        <ReflogView />
+                        break;
+                }
+            }
+        </main>
+    </div>
+
+    @if (W.ConsoleOpen && W.Repo is not null)
+    {
+        <ConsolePanel />
+    }
+
+    <footer class="gf-statusbar">
+        @if (W.IsBusy)
+        {
+            <span class="gf-status-busy">@W.BusyText…</span>
+            <span class="gf-mono gf-ellipsis">@W.ProgressText</span>
+        }
+        else if (W.Snapshot is { } s)
+        {
+            <span><MudIcon Icon="@Icons.Material.Outlined.CallSplit" Size="Size.Small" /> @(s.HeadBranch ?? $"detached at {s.HeadSha?[..8]}")</span>
+            @if (W.CurrentBranchHead is { HasUpstream: true } h)
+            {
+                <span class="gf-dim">↑@(h.Ahead ?? 0) ↓@(h.Behind ?? 0) @h.UpstreamName</span>
+            }
+            <span class="gf-dim gf-mono gf-ellipsis">@s.WorkingDirectory</span>
+            @if (W.HistoryLoading)
+            {
+                <span class="gf-dim">loading history… @W.Rows.Count.ToString("N0", CultureInfo.CurrentCulture)</span>
+            }
+        }
+        <span class="gf-spacer"></span>
+        <span class="gf-dim">@_gitVersionText</span>
+    </footer>
+</div>
+
+@code {
+    private MudThemeProvider? _themeProvider;
+    private MudTheme _theme = GitForgeTheme.Create("#3B82F6");
+    private bool _dark = true;
+    private string _gitVersionText = string.Empty;
+
+    private bool NoRepo => W.Repo is null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        W.Changed += OnChanged;
+        Shortcuts.Command += OnCommand;
+        await W.InitializeAsync();
+        _theme = GitForgeTheme.Create(W.Settings.AccentColor);
+        Shortcuts.VimNavigation = W.Settings.VimNavigation;
+        SettingsStore.Changed += OnSettingsChanged;
+
+        var version = await Cli.GetVersionAsync();
+        _gitVersionText = version is null
+            ? "git not found — set its path in Settings"
+            : version < GitForge.Git.GitEngineOptions.MinimumGitVersion ? $"git {version} (2.39+ required)" : $"git {version}";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        await Shortcuts.AttachAsync();
+        await ApplyThemePreferenceAsync();
+        if (W.Settings.RecentRepositories.FirstOrDefault() is { } last && Directory.Exists(last))
+        {
+            await W.OpenAsync(last);
+        }
+    }
+
+    private async Task ApplyThemePreferenceAsync()
+    {
+        if (_themeProvider is null) return;
+        _dark = W.Settings.Theme switch
+        {
+            ThemePreference.Dark => true,
+            ThemePreference.Light => false,
+            _ => await _themeProvider.GetSystemDarkModeAsync(),
+        };
+        if (W.Settings.Theme == ThemePreference.System)
+        {
+            await _themeProvider.WatchSystemDarkModeAsync(dark =>
+            {
+                if (W.Settings.Theme != ThemePreference.System) return Task.CompletedTask;
+                _dark = dark;
+                return InvokeAsync(StateHasChanged);
+            });
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task ToggleTheme()
+    {
+        _dark = !_dark;
+        await SettingsStore.UpdateAsync(s => s with { Theme = _dark ? ThemePreference.Dark : ThemePreference.Light });
+    }
+
+    private void OnSettingsChanged(object? sender, AppSettings s)
+    {
+        _theme = GitForgeTheme.Create(s.AccentColor);
+        Shortcuts.VimNavigation = s.VimNavigation;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task OnCommand(string command)
+    {
+        switch (command)
+        {
+            case "view.status" when W.Repo is not null: W.SetView(WorkspaceView.FileStatus); break;
+            case "view.history" when W.Repo is not null: W.SetView(WorkspaceView.History); break;
+            case "view.reflog" when W.Repo is not null: W.SetView(WorkspaceView.Reflog); break;
+            case "repo.open": await Show<OpenRepositoryDialog>("Open repository"); break;
+            case "repo.clone": await Show<CloneDialog>("Clone repository", MaxWidth.Medium); break;
+            case "repo.refresh": await W.RefreshAsync(RepositoryChangeKind.All); break;
+            case "remote.fetch": await W.FetchAsync(); break;
+            case "remote.pull": await W.PullAsync(); break;
+            case "remote.push": await W.PushAsync(); break;
+            case "branch.new" when W.Repo is not null: await Show<NewBranchDialog>("New branch"); break;
+            case "stash.save" when W.Repo is not null: await Show<StashDialog>("Stash changes"); break;
+            case "console.toggle" when W.Repo is not null:
+                W.ConsoleOpen = !W.ConsoleOpen;
+                W.Notify();
+                break;
+            case "help.shortcuts": await Show<ShortcutsDialog>("Keyboard shortcuts"); break;
+        }
+    }
+
+    private Task ShowAccounts() => Show<AccountsDialog>("Hosting accounts", MaxWidth.Medium);
+
+    private Task ShowSettings() => Show<SettingsDialog>("Settings");
+
+    private Task ShowPullRequests() => Show<PullRequestsDialog>("Pull requests", MaxWidth.Medium);
+
+    private async Task Show<TDialog>(string title, MaxWidth width = MaxWidth.Small) where TDialog : IComponent
+    {
+        var options = new DialogOptions { MaxWidth = width, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true };
+        var dialog = await Dialogs.ShowAsync<TDialog>(title, options);
+        await dialog.Result;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        W.Changed -= OnChanged;
+        Shortcuts.Command -= OnCommand;
+        SettingsStore.Changed -= OnSettingsChanged;
+        await Shortcuts.DisposeAsync();
+    }
+}

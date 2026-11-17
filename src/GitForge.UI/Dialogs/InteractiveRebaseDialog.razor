@@ -1,0 +1,125 @@
+@inject RepoWorkspace W
+
+<MudDialog>
+    <DialogContent>
+        <p class="gf-dim gf-small">Oldest commit at the top. Drag rows (or Alt+↑/↓) to reorder; pick an action per commit. Squash and fixup combine a commit into the one above it.</p>
+        @if (_plan is null)
+        {
+            <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+        }
+        else if (_plan.Count == 0)
+        {
+            <div class="gf-empty">No commits between this commit and HEAD (merge commits are not rebased).</div>
+        }
+        else
+        {
+            <div class="gf-rebase-list" role="list">
+                @for (var i = 0; i < _plan.Count; i++)
+                {
+                    var index = i;
+                    var item = _plan[index];
+                    <div class="gf-rebase-row @ActionCss(item.Action) @(_dragIndex == index ? "dragging" : null)" role="listitem" draggable="true" tabindex="0"
+                         @ondragstart="@(() => _dragIndex = index)" @ondragover:preventDefault="true" @ondrop="@(() => Drop(index))" @onkeydown="@(e => OnRowKey(e, index))">
+                        <span class="gf-drag-handle" aria-hidden="true">⋮⋮</span>
+                        <select class="gf-select" value="@item.Action" @onchange="@(e => SetAction(index, e.Value?.ToString()))" aria-label="Action">
+                            @foreach (var a in Enum.GetValues<RebaseAction>())
+                            {
+                                <option value="@a">@a.ToString().ToLowerInvariant()</option>
+                            }
+                        </select>
+                        <span class="gf-mono gf-dim">@item.ShortSha</span>
+                        @if (item.Action == RebaseAction.Reword)
+                        {
+                            <input class="gf-input gf-grow" value="@(item.NewMessage ?? item.Subject)" @onchange="@(e => SetMessage(index, e.Value?.ToString()))" aria-label="New message" />
+                        }
+                        else
+                        {
+                            <span class="gf-ellipsis gf-grow">@item.Subject</span>
+                        }
+                        <button class="gf-icon-button" title="Move up" disabled="@(index == 0)" @onclick="@(() => Move(index, -1))">↑</button>
+                        <button class="gf-icon-button" title="Move down" disabled="@(index == _plan.Count - 1)" @onclick="@(() => Move(index, +1))">↓</button>
+                    </div>
+                }
+            </div>
+            @if (Error is { } error)
+            {
+                <div class="gf-warn gf-small gf-mt">@error</div>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(_plan is not { Count: > 0 } || Error is not null)" OnClick="Start">Start rebase</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter, EditorRequired] public string BaseSha { get; set; } = string.Empty;
+
+    private List<RebaseTodoItem>? _plan;
+    private int _dragIndex = -1;
+
+    private string? Error => _plan is null ? null : RebaseTodoWriter.Validate(_plan);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (W.Repo is not { } repo) return;
+        try
+        {
+            _plan = (await repo.History.GetRebasePlanAsync(BaseSha)).ToList();
+        }
+        catch (Exception ex)
+        {
+            W.Error("Build rebase plan", ex);
+            _plan = [];
+        }
+    }
+
+    private static string ActionCss(RebaseAction a) => a.ToString().ToLowerInvariant();
+
+    private void SetAction(int i, string? value)
+    {
+        if (Enum.TryParse<RebaseAction>(value, out var a)) _plan![i] = _plan[i] with { Action = a, NewMessage = a == RebaseAction.Reword ? _plan[i].NewMessage ?? _plan[i].Subject : null };
+    }
+
+    private void SetMessage(int i, string? value) => _plan![i] = _plan[i] with { NewMessage = value };
+
+    private void Move(int i, int delta)
+    {
+        var j = i + delta;
+        if (_plan is null || j < 0 || j >= _plan.Count) return;
+        (_plan[i], _plan[j]) = (_plan[j], _plan[i]);
+    }
+
+    private void Drop(int target)
+    {
+        if (_plan is null || _dragIndex < 0 || _dragIndex == target) return;
+        var item = _plan[_dragIndex];
+        _plan.RemoveAt(_dragIndex);
+        _plan.Insert(target, item);
+        _dragIndex = -1;
+    }
+
+    private void OnRowKey(KeyboardEventArgs e, int i)
+    {
+        if (!e.AltKey) return;
+        if (e.Key == "ArrowUp") Move(i, -1);
+        else if (e.Key == "ArrowDown") Move(i, +1);
+    }
+
+    private async Task Start()
+    {
+        if (_plan is null || Error is not null) return;
+        var plan = _plan.ToList();
+        Dialog.Close();
+        await W.RunAsync("Rebasing", async (r, _) =>
+        {
+            var result = await r.History.RunInteractiveRebaseAsync(BaseSha, plan);
+            if (!result.Succeeded)
+            {
+                W.Info("Rebase stopped: " + (result.StandardError + result.StandardOutput).Trim(), Severity.Warning);
+            }
+        });
+    }
+}

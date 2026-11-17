@@ -1,0 +1,47 @@
+<div class="gf-file-group">
+    <div class="gf-group-head">
+        <span class="gf-group-title">@Title</span>
+        <span class="gf-count">@Files.Count</span>
+        <span class="gf-spacer"></span>
+        @HeaderActions
+    </div>
+    <div class="gf-list">
+        @foreach (var f in Files)
+        {
+            <div class="gf-file-row @(IsSelected(f) ? "selected" : null)" @onclick="@(() => OnSelect.InvokeAsync(f))"
+                 title="@(f.OldPath is null ? f.Path : $"{f.OldPath} → {f.Path}")">
+                <StatusGlyph Kind="f.Kind" />
+                <span class="gf-ellipsis gf-grow"><span class="gf-filename">@f.FileName</span> <span class="gf-dim">@f.Directory</span></span>
+                <span class="gf-row-actions">
+                    @if (f.Area == StagingArea.Unstaged && f.Kind != FileChangeKind.Conflicted)
+                    {
+                        <button class="gf-icon-button" title="Stage (s)" @onclick:stopPropagation="true" @onclick="@(() => OnStage.InvokeAsync(f))">+</button>
+                        <button class="gf-icon-button danger" title="Discard (d)" @onclick:stopPropagation="true" @onclick="@(() => OnDiscard.InvokeAsync(f))">⟲</button>
+                    }
+                    else if (f.Area == StagingArea.Staged)
+                    {
+                        <button class="gf-icon-button" title="Unstage (u)" @onclick:stopPropagation="true" @onclick="@(() => OnUnstage.InvokeAsync(f))">−</button>
+                    }
+                </span>
+            </div>
+        }
+        @if (Files.Count == 0)
+        {
+            <div class="gf-empty gf-small">@EmptyText</div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public IReadOnlyList<FileStatusEntry> Files { get; set; } = [];
+    [Parameter] public FileStatusEntry? Selected { get; set; }
+    [Parameter] public string EmptyText { get; set; } = "Nothing here";
+    [Parameter] public RenderFragment? HeaderActions { get; set; }
+    [Parameter] public EventCallback<FileStatusEntry> OnSelect { get; set; }
+    [Parameter] public EventCallback<FileStatusEntry> OnStage { get; set; }
+    [Parameter] public EventCallback<FileStatusEntry> OnUnstage { get; set; }
+    [Parameter] public EventCallback<FileStatusEntry> OnDiscard { get; set; }
+
+    private bool IsSelected(FileStatusEntry f) => Selected is not null && Selected.Path == f.Path && Selected.Area == f.Area && Selected.Kind == f.Kind;
+}

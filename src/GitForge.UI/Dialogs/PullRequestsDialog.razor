@@ -1,0 +1,92 @@
+@inject RepoWorkspace W
+@inject IAccountService Accounts
+@inject IPlatformShell Shell
+
+<MudDialog>
+    <DialogContent>
+        @if (_remote?.Hosted is not { } hosted)
+        {
+            <div class="gf-empty">The current remote is not a recognized GitHub, GitLab, Bitbucket, or Azure DevOps repository. For self-hosted servers, add an account for that host first.</div>
+        }
+        else
+        {
+            <div class="gf-dialog-row">
+                <span class="gf-filename">@hosted.FullName</span>
+                <span class="gf-dim gf-small">@hosted.Provider · @hosted.Host</span>
+                <span class="gf-spacer"></span>
+                @if (W.CurrentBranch is { } branch)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Outlined.OpenInNew" OnClick="@(() => Create(hosted, branch))">
+                        Create for @branch
+                    </MudButton>
+                }
+            </div>
+            @if (_account is null)
+            {
+                <p class="gf-dim gf-small">No account matches this remote, so open requests cannot be listed. "Create" still opens the provider's page in your browser.</p>
+            }
+            else if (_loading)
+            {
+                <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+            }
+            else
+            {
+                <div class="gf-list gf-dialog-list">
+                    @foreach (var pr in _prs)
+                    {
+                        <div class="gf-file-row" @onclick="@(() => Shell.OpenUrl(pr.WebUrl))" title="Open in browser">
+                            <span class="gf-mono gf-dim">#@pr.Id</span>
+                            <span class="gf-ellipsis gf-grow">@(pr.IsDraft ? "[Draft] " : null)@pr.Title</span>
+                            <span class="gf-pill">@pr.SourceBranch → @pr.TargetBranch</span>
+                            <span class="gf-dim gf-small">@pr.Author</span>
+                        </div>
+                    }
+                    @if (_prs.Count == 0)
+                    {
+                        <div class="gf-empty gf-small">No open pull requests.</div>
+                    }
+                </div>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Close())">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    private RemoteInfo? _remote;
+    private HostingAccount? _account;
+    private IReadOnlyList<HostedPullRequest> _prs = [];
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _remote = W.DefaultRemote;
+        if (_remote?.Hosted is not { } hosted) return;
+        _account = Accounts.FindAccountFor(hosted);
+        if (_account is null) return;
+
+        _loading = true;
+        try
+        {
+            var token = await Accounts.GetTokenAsync(_account) ?? throw new InvalidOperationException("Token not found in the keyring.");
+            _prs = await Accounts.GetProvider(hosted.Provider).ListPullRequestsAsync(_account, token, hosted);
+        }
+        catch (Exception ex)
+        {
+            W.Error("List pull requests", ex);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void Create(RemoteRepositoryRef hosted, string branch)
+    {
+        var target = W.Snapshot?.RemoteBranches.Any(b => b.Name == $"{_remote!.Name}/main") == true ? "main" : "master";
+        Shell.OpenUrl(Accounts.GetProvider(hosted.Provider).GetCreatePullRequestUrl(_account, hosted, branch, target));
+    }
+}

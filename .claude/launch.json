@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gitforge-devhost",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "src/GitForge.DevHost", "--", "--GitForge:SettingsPath=.devhost/settings.json"],
+      "port": 5199,
+      "url": "http://127.0.0.1:5199"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+@inject RepoWorkspace W
+@inject ShortcutService Shortcuts
+
+<div class="gf-welcome">
+    <div class="gf-welcome-card">
+        <h1>GitForge</h1>
+        <p class="gf-dim">Fast, keyboard-first Git client. Open or clone a repository to begin.</p>
+        <div class="gf-welcome-actions">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Outlined.FolderOpen" OnClick="@(() => Shortcuts.RaiseAsync("repo.open"))">Open repository</MudButton>
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Outlined.CloudDownload" OnClick="@(() => Shortcuts.RaiseAsync("repo.clone"))">Clone</MudButton>
+        </div>
+        @if (W.Settings.RecentRepositories.Count > 0)
+        {
+            <div class="gf-group-title">Recent</div>
+            <div class="gf-list">
+                @foreach (var r in W.Settings.RecentRepositories.Take(10))
+                {
+                    <div class="gf-file-row" @onclick="@(() => W.OpenAsync(r))">
+                        <MudIcon Icon="@Icons.Material.Outlined.Folder" Size="Size.Small" />
+                        <span class="gf-filename">@System.IO.Path.GetFileName(r)</span>
+                        <span class="gf-dim gf-mono gf-small gf-ellipsis">@r</span>
+                    </div>
+                }
+            </div>
+        }
+        <p class="gf-dim gf-small">Press <kbd>?</kbd> for keyboard shortcuts.</p>
+    </div>
+</div>

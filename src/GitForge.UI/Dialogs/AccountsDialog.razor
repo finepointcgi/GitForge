@@ -1,0 +1,120 @@
+@using GitForge.Hosting
+@inject IAccountService Accounts
+@inject ISecretStore Secrets
+@inject RepoWorkspace W
+@inject IDialogService Dialogs
+
+<MudDialog>
+    <DialogContent>
+        <p class="gf-dim gf-small">Tokens are validated against the provider, then stored only in @Secrets.BackendName. They are never written to settings files or logs.</p>
+        @if (Accounts.Accounts.Count > 0)
+        {
+            <div class="gf-list gf-dialog-list">
+                @foreach (var a in Accounts.Accounts)
+                {
+                    <div class="gf-file-row">
+                        <MudIcon Icon="@(a.Provider == HostingProviderKind.GitHub ? Icons.Custom.Brands.GitHub : Icons.Material.Outlined.Cloud)" Size="Size.Small" />
+                        <span class="gf-filename">@a.DisplayName</span>
+                        <span class="gf-dim gf-small gf-grow gf-ellipsis">@a.Provider · @a.WebBaseUrl.Host @(a.Username is null ? null : $"· {a.Username}")</span>
+                        <button class="gf-link-button danger" @onclick="@(() => Remove(a))">Remove</button>
+                    </div>
+                }
+            </div>
+        }
+
+        <div class="gf-group-title gf-mt">Add account</div>
+        <div class="gf-form-grid">
+            <MudSelect T="HostingProviderKind" @bind-Value="_kind" Label="Provider" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true">
+                @foreach (var k in Enum.GetValues<HostingProviderKind>())
+                {
+                    <MudSelectItem T="HostingProviderKind" Value="k">@Name(k)</MudSelectItem>
+                }
+            </MudSelect>
+            <MudTextField T="string" @bind-Value="_displayName" Label="Display name" Placeholder="Work GitHub" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudCheckBox T="bool" @bind-Value="_selfHosted" Label="Self-hosted / enterprise instance" Size="Size.Small" Dense="true" />
+            @if (_selfHosted)
+            {
+                <MudTextField T="string" @bind-Value="_url" Label="Base URL (https://…)" Placeholder="@UrlHint" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            }
+            @if (_kind == HostingProviderKind.AzureDevOps && !_selfHosted)
+            {
+                <MudTextField T="string" @bind-Value="_org" Label="Organization" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            }
+            <MudTextField T="string" @bind-Value="_username" Label="@UsernameLabel" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField T="string" @bind-Value="_token" Label="@TokenLabel" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        </div>
+        <p class="gf-dim gf-small">@ScopeHint</p>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Close())">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(_saving || string.IsNullOrWhiteSpace(_token))" OnClick="Add">@(_saving ? "Validating…" : "Validate and add")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    private HostingProviderKind _kind = HostingProviderKind.GitHub;
+    private bool _selfHosted, _saving;
+    private string? _displayName, _url, _org, _username, _token;
+
+    private static string Name(HostingProviderKind k) => k switch
+    {
+        HostingProviderKind.AzureDevOps => "Azure DevOps",
+        _ => k.ToString(),
+    };
+
+    private string UrlHint => _kind switch
+    {
+        HostingProviderKind.GitHub => "https://github.example.com (GitHub Enterprise Server)",
+        HostingProviderKind.GitLab => "https://gitlab.example.com",
+        HostingProviderKind.AzureDevOps => "https://ado.example.com/tfs/DefaultCollection",
+        _ => "https://bitbucket.example.com",
+    };
+
+    private string UsernameLabel => _kind switch
+    {
+        HostingProviderKind.Bitbucket => "Atlassian account email (empty for workspace/repo access tokens)",
+        _ => "Username (optional)",
+    };
+
+    private string TokenLabel => _kind switch
+    {
+        HostingProviderKind.Bitbucket => "API token or access token",
+        _ => "Personal access token",
+    };
+
+    private string ScopeHint => _kind switch
+    {
+        HostingProviderKind.GitHub => "Fine-grained token with repository Metadata + Pull requests (read), or classic token with 'repo'.",
+        HostingProviderKind.GitLab => "Personal access token with 'read_api' (or 'api').",
+        HostingProviderKind.Bitbucket => "API token with read scopes for account, workspaces, repositories, and pull requests. Bitbucket Data Center is not supported yet.",
+        _ => "PAT with Code (Read) scope.",
+    };
+
+    private async Task Add()
+    {
+        _saving = true;
+        try
+        {
+            var account = HostingDefaults.CreateAccount(_kind, _displayName ?? string.Empty, _username, _selfHosted ? _url : null, _org);
+            var user = await Accounts.AddAsync(account, _token!);
+            W.Info($"Added {account.DisplayName} as {user.DisplayName ?? user.Login}", Severity.Success);
+            _token = null;
+            _displayName = null;
+        }
+        catch (Exception ex)
+        {
+            W.Error("Add account", ex);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task Remove(HostingAccount a)
+    {
+        if (await Dialogs.ShowMessageBoxAsync("Remove account", $"Remove '{a.DisplayName}' and delete its token from the keyring?", yesText: "Remove", cancelText: "Cancel") != true) return;
+        await Accounts.RemoveAsync(a.Id);
+    }
+}

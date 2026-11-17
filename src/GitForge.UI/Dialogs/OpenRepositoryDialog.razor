@@ -1,0 +1,63 @@
+@inject RepoWorkspace W
+@inject IPlatformShell Shell
+@inject IGitRepositoryFactory Factory
+
+<MudDialog>
+    <DialogContent>
+        <div class="gf-dialog-row">
+            <MudTextField T="string" @bind-Value="_path" Label="Repository folder" Placeholder="C:\src\my-repo" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" AutoFocus="true" Class="gf-grow" OnKeyUp="OnKeyUp" />
+            @if (Shell.CanPickFolder)
+            {
+                <MudButton Variant="Variant.Outlined" OnClick="Browse">Browse…</MudButton>
+            }
+        </div>
+        <MudCheckBox T="bool" @bind-Value="_init" Label="Folder is not a repository yet — initialize a new one (git init)" Size="Size.Small" Dense="true" />
+        @if (W.Settings.RecentRepositories.Count > 0)
+        {
+            <div class="gf-group-title gf-mt">Recent</div>
+            <div class="gf-list gf-dialog-list">
+                @foreach (var r in W.Settings.RecentRepositories)
+                {
+                    <div class="gf-file-row" @onclick="@(() => Open(r))"><span class="gf-mono gf-small gf-ellipsis">@r</span></div>
+                }
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@string.IsNullOrWhiteSpace(_path)" OnClick="@(() => Open(_path))">@(_init ? "Initialize" : "Open")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    private string _path = string.Empty;
+    private bool _init;
+
+    private async Task Browse()
+    {
+        var folder = await Shell.PickFolderAsync(_path);
+        if (folder is not null) _path = folder;
+    }
+
+    private async Task OnKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_path)) await Open(_path);
+    }
+
+    private async Task Open(string path)
+    {
+        try
+        {
+            if (_init) path = await Factory.InitAsync(path.Trim().Trim('"'));
+        }
+        catch (Exception ex)
+        {
+            W.Error("Initialize repository", ex);
+            return;
+        }
+
+        Dialog.Close();
+        await W.OpenAsync(path);
+    }
+}

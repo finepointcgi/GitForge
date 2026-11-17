@@ -1,0 +1,26 @@
+@inject RepoWorkspace W
+
+<div class="gf-conflict">
+    <div class="gf-conflict-title"><MudIcon Icon="@Icons.Material.Outlined.WarningAmber" Color="Color.Warning" /> Merge conflict in <span class="gf-mono">@Path</span></div>
+    <p class="gf-dim">Choose a side for the whole file, resolve it in your external merge tool, or edit the file and mark it resolved.</p>
+    <div class="gf-conflict-buttons">
+        <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="@(() => Resolve(ConflictSide.Ours))">Use mine (ours)</MudButton>
+        <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="@(() => Resolve(ConflictSide.Theirs))">Use theirs</MudButton>
+        <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="LaunchTool">Open merge tool@(W.Settings.ExternalMergeTool is { Length: > 0 } t ? $" ({t})" : string.Empty)</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="MarkResolved">Mark resolved</MudButton>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Path { get; set; } = string.Empty;
+
+    private Task Resolve(ConflictSide side) => W.RunAsync($"Resolving with {side}", (r, _) => r.Index.ResolveConflictAsync(Path, side));
+
+    private Task MarkResolved() => W.RunAsync("Marking resolved", (r, _) => r.Index.MarkResolvedAsync(Path));
+
+    private Task LaunchTool() => W.RunAsync("Waiting for merge tool", async (r, _) =>
+    {
+        var result = await r.Index.LaunchMergeToolAsync(Path, W.Settings.ExternalMergeTool);
+        result.EnsureSuccess("mergetool");
+    });
+}

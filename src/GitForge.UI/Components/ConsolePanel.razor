@@ -1,0 +1,68 @@
+@implements IDisposable
+@inject RepoWorkspace W
+@inject IJSRuntime JS
+
+<section class="gf-console" aria-label="Git console">
+    <div class="gf-pane-toolbar">
+        <MudIcon Icon="@Icons.Material.Outlined.Terminal" Size="Size.Small" />
+        <span class="gf-group-title">Git console</span>
+        <span class="gf-dim gf-mono gf-small gf-ellipsis">@W.Repo?.WorkingDirectory</span>
+        <span class="gf-spacer"></span>
+        <button class="gf-link-button" @onclick="@(() => { W.ConsoleLines.Clear(); })">Clear</button>
+        <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small" OnClick="Close" aria-label="Close console" />
+    </div>
+    <pre class="gf-console-output" @ref="_output">@string.Join('\n', W.ConsoleLines)</pre>
+    <div class="gf-console-input">
+        <span class="gf-mono gf-dim">git</span>
+        <input @ref="_input" class="gf-input gf-mono gf-grow" placeholder="status -sb   (runs in the repository; ↑/↓ history)" @bind="_command" @bind:event="oninput" @onkeydown="OnKeyDown" aria-label="git arguments" />
+    </div>
+</section>
+
+@code {
+    private ElementReference _output;
+    private ElementReference _input;
+    private string _command = string.Empty;
+    private readonly List<string> _history = [];
+    private int _historyIndex;
+
+    protected override void OnInitialized() => W.Changed += OnChanged;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await _input.FocusAsync();
+        await JS.InvokeVoidAsync("gitforge.scrollToBottom", _output);
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Enter" when _command.Trim().Length > 0:
+                var cmd = _command.Trim();
+                _history.Add(cmd);
+                _historyIndex = _history.Count;
+                _command = string.Empty;
+                var args = CommandLineSplitter.Split(cmd.StartsWith("git ", StringComparison.Ordinal) ? cmd[4..] : cmd);
+                await W.RunConsoleAsync(args);
+                break;
+            case "ArrowUp" when _history.Count > 0:
+                _historyIndex = Math.Max(0, _historyIndex - 1);
+                _command = _history[_historyIndex];
+                break;
+            case "ArrowDown" when _history.Count > 0:
+                _historyIndex = Math.Min(_history.Count, _historyIndex + 1);
+                _command = _historyIndex < _history.Count ? _history[_historyIndex] : string.Empty;
+                break;
+        }
+    }
+
+    private void Close()
+    {
+        W.ConsoleOpen = false;
+        W.Notify();
+    }
+
+    public void Dispose() => W.Changed -= OnChanged;
+}

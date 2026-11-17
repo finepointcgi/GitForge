@@ -1,0 +1,38 @@
+@using GitForge.Core.Validation
+@inject RepoWorkspace W
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" @bind-Value="_name" Label="Branch name" Placeholder="feature/ABC-123-short-description" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      AutoFocus="true" Error="@(Error is not null && _name.Length > 0)" ErrorText="@Error" OnKeyUp="OnKeyUp" />
+        <MudTextField T="string" @bind-Value="_start" Label="Start point (branch, tag, or SHA)" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        <MudCheckBox T="bool" @bind-Value="_checkout" Label="Check out the new branch" Size="Size.Small" Dense="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(Error is not null)" OnClick="Create">Create branch</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    private string _name = string.Empty;
+    private string _start = "HEAD";
+    private bool _checkout = true;
+
+    private string? Error => RefNameValidator.Validate(_name)
+        ?? (W.Snapshot?.LocalBranches.Any(b => b.Name == _name) == true ? "A branch with this name already exists." : null);
+
+    private async Task OnKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Create();
+    }
+
+    private async Task Create()
+    {
+        if (Error is not null) return;
+        Dialog.Close();
+        var name = _name.Trim();
+        await W.RunAsync($"Creating {name}", (r, _) => r.Branches.CreateAsync(name, string.IsNullOrWhiteSpace(_start) ? "HEAD" : _start.Trim(), _checkout), $"Created {name}");
+    }
+}

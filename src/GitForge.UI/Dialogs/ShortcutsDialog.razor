@@ -1,0 +1,20 @@
+<MudDialog>
+    <DialogContent>
+        <table class="gf-table gf-shortcuts">
+            <tbody>
+                @foreach (var (keys, _, description) in ShortcutService.Map)
+                {
+                    <tr><td><kbd>@keys</kbd></td><td>@description</td></tr>
+                }
+            </tbody>
+        </table>
+        <p class="gf-dim gf-small">Single-key shortcuts work outside text fields when vim-style navigation is on. Right-click branches, tags, stashes, and commits for more actions.</p>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Close())">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+}

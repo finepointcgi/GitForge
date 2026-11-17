@@ -1,0 +1,114 @@
+@inject RepoWorkspace W
+
+@if (_details is null)
+{
+    <div class="gf-empty">@(_loading ? "Loading…" : "Select a commit")</div>
+}
+else
+{
+    <div class="gf-split-x" id="gf-commit-details">
+        <div class="gf-pane">
+            <div class="gf-commit-meta">
+                <div class="gf-commit-subject">@_details.Summary.Subject</div>
+                @if (Body is { Length: > 0 } body)
+                {
+                    <pre class="gf-commit-body">@body</pre>
+                }
+                <table class="gf-meta-table">
+                    <tr><th>Commit</th><td class="gf-mono">@_details.Summary.Sha</td></tr>
+                    <tr><th>Parents</th><td class="gf-mono">@string.Join("  ", _details.Summary.ParentShas.Select(p => p[..8]))</td></tr>
+                    <tr><th>Author</th><td>@_details.Summary.AuthorName &lt;@_details.Summary.AuthorEmail&gt; · @_details.Summary.AuthorDate.LocalDateTime.ToString("f", CultureInfo.CurrentCulture)</td></tr>
+                    @if (_details.CommitterEmail != _details.Summary.AuthorEmail || _details.CommitDate != _details.Summary.AuthorDate)
+                    {
+                        <tr><th>Committer</th><td>@_details.CommitterName · @_details.CommitDate.LocalDateTime.ToString("f", CultureInfo.CurrentCulture)</td></tr>
+                    }
+                </table>
+            </div>
+            <div class="gf-list">
+                @foreach (var f in _details.Changes)
+                {
+                    <div class="gf-file-row @(f == _file ? "selected" : null)" @onclick="@(() => SelectFile(f))" title="@(f.OldPath is null ? f.Path : $"{f.OldPath} → {f.Path}")">
+                        <StatusGlyph Kind="f.Kind" />
+                        <span class="gf-ellipsis"><span class="gf-filename">@System.IO.Path.GetFileName(f.Path)</span> <span class="gf-dim">@System.IO.Path.GetDirectoryName(f.Path)</span></span>
+                    </div>
+                }
+            </div>
+        </div>
+        <div class="gf-splitter gf-splitter-x" data-var="--gf-files-w" data-target="gf-commit-details" data-min="200" data-max="900"></div>
+        <div class="gf-pane">
+            <DiffViewer Diff="_diff" Loading="_diffLoading" Title="@_file?.Path" />
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string? Sha { get; set; }
+
+    private string? _loadedSha;
+    private CommitDetails? _details;
+    private FileChange? _file;
+    private FileDiff? _diff;
+    private bool _loading;
+    private bool _diffLoading;
+
+    private string? Body
+    {
+        get
+        {
+            if (_details is null) return null;
+            var msg = _details.FullMessage.TrimEnd();
+            var nl = msg.IndexOf('\n', StringComparison.Ordinal);
+            return nl < 0 ? null : msg[(nl + 1)..].Trim('\n', '\r');
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Sha == _loadedSha || W.Repo is not { } repo) return;
+        _loadedSha = Sha;
+        _details = null;
+        _diff = null;
+        _file = null;
+        if (Sha is null) return;
+
+        _loading = true;
+        try
+        {
+            var details = await Task.Run(() => repo.Read.GetCommitDetailsAsync(Sha));
+            if (Sha != _loadedSha) return;
+            _details = details;
+            if (details.Changes.Count > 0) await SelectFile(details.Changes[0]);
+        }
+        catch (Exception ex)
+        {
+            W.Error("Load commit", ex);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SelectFile(FileChange file)
+    {
+        if (W.Repo is not { } repo || _details is null) return;
+        _file = file;
+        _diffLoading = true;
+        StateHasChanged();
+        try
+        {
+            var sha = _details.Summary.Sha;
+            var options = new DiffOptions(W.Settings.IgnoreWhitespace);
+            var diff = await Task.Run(() => repo.Read.GetCommitDiffAsync(sha, file, options));
+            if (_file == file) _diff = diff;
+        }
+        catch (Exception ex)
+        {
+            W.Error("Load diff", ex);
+        }
+        finally
+        {
+            _diffLoading = false;
+        }
+    }
+}

@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GitForge.Core/GitForge.Core.csproj" />
+    <Project Path="src/GitForge.Desktop/GitForge.Desktop.csproj" />
+    <Project Path="src/GitForge.DevHost/GitForge.DevHost.csproj" />
+    <Project Path="src/GitForge.Git/GitForge.Git.csproj" />
+    <Project Path="src/GitForge.Hosting/GitForge.Hosting.csproj" />
+    <Project Path="src/GitForge.Platform/GitForge.Platform.csproj" />
+    <Project Path="src/GitForge.UI/GitForge.UI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/GitForge.Core.Tests/GitForge.Core.Tests.csproj" />
+    <Project Path="tests/GitForge.Git.Tests/GitForge.Git.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,22 @@
+<div class="gf-diff-row hunk">
+    <span class="gf-mono gf-ellipsis gf-grow">@Hunk.Header</span>
+    @if (CanApply)
+    {
+        @if (Area == StagingArea.Unstaged)
+        {
+            <button class="gf-link-button" @onclick="@(() => OnApply.InvokeAsync((Hunk, PatchAction.Stage)))">Stage hunk</button>
+            <button class="gf-link-button danger" @onclick="@(() => OnApply.InvokeAsync((Hunk, PatchAction.Discard)))">Discard hunk</button>
+        }
+        else if (Area == StagingArea.Staged)
+        {
+            <button class="gf-link-button" @onclick="@(() => OnApply.InvokeAsync((Hunk, PatchAction.Unstage)))">Unstage hunk</button>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DiffHunk Hunk { get; set; } = default!;
+    [Parameter] public StagingArea? Area { get; set; }
+    [Parameter] public bool CanApply { get; set; }
+    [Parameter] public EventCallback<(DiffHunk Hunk, PatchAction Action)> OnApply { get; set; }
+}

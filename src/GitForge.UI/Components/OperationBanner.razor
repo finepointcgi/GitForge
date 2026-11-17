@@ -1,0 +1,44 @@
+@implements IDisposable
+@inject RepoWorkspace W
+
+@if (W.Snapshot is { Operation: not RepositoryOperation.None } s)
+{
+    <div class="gf-banner" role="status">
+        <MudIcon Icon="@Icons.Material.Outlined.WarningAmber" Size="Size.Small" />
+        <span><strong>@Describe(s.Operation)</strong> in progress.
+            @(W.Status.Conflicted.Count > 0 ? $"{W.Status.Conflicted.Count} conflicted file(s) — resolve them, then continue." : "No conflicts remain — continue when ready.")</span>
+        <span class="gf-spacer"></span>
+        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Disabled="@(W.Status.Conflicted.Count > 0)" OnClick="@(() => Run("Continuing", r => r.History.ContinueAsync()))">Continue</MudButton>
+        @if (s.Operation is RepositoryOperation.Rebase or RepositoryOperation.RebaseInteractive or RepositoryOperation.CherryPick or RepositoryOperation.Revert)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => Run("Skipping", r => r.History.SkipAsync()))">Skip</MudButton>
+        }
+        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => Run("Aborting", r => r.History.AbortAsync()))">Abort</MudButton>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized() => W.Changed += OnChanged;
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private static string Describe(RepositoryOperation op) => op switch
+    {
+        RepositoryOperation.Merge => "Merge",
+        RepositoryOperation.Rebase => "Rebase",
+        RepositoryOperation.RebaseInteractive => "Interactive rebase",
+        RepositoryOperation.CherryPick => "Cherry-pick",
+        RepositoryOperation.Revert => "Revert",
+        RepositoryOperation.Bisect => "Bisect",
+        RepositoryOperation.ApplyMailbox => "git am",
+        _ => op.ToString(),
+    };
+
+    private Task Run(string label, Func<IGitRepository, Task<GitResult>> op) => W.RunAsync(label, async (r, _) =>
+    {
+        var result = await op(r);
+        if (!result.Succeeded) W.Info((result.StandardError + result.StandardOutput).Trim(), Severity.Warning);
+    });
+
+    public void Dispose() => W.Changed -= OnChanged;
+}

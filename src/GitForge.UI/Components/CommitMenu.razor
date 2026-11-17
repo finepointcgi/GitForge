@@ -1,0 +1,81 @@
+@inject RepoWorkspace W
+@inject IDialogService Dialogs
+@inject IJSRuntime JS
+
+<MudMenuItem Icon="@Icons.Material.Outlined.Login" OnClick="Checkout">Checkout (detached)</MudMenuItem>
+<MudMenuItem Icon="@Icons.Material.Outlined.CallSplit" OnClick="NewBranch">New branch here…</MudMenuItem>
+<MudMenuItem Icon="@Icons.Material.Outlined.LocalOffer" OnClick="NewTag">New tag here…</MudMenuItem>
+<MudDivider />
+<MudMenuItem Icon="@Icons.Material.Outlined.ContentPasteGo" OnClick="CherryPick">Cherry-pick onto @(W.CurrentBranch ?? "HEAD")</MudMenuItem>
+<MudMenuItem Icon="@Icons.Material.Outlined.Undo" OnClick="Revert">Revert commit</MudMenuItem>
+<MudMenuItem Icon="@Icons.Material.Outlined.Reorder" OnClick="InteractiveRebase">Interactive rebase children…</MudMenuItem>
+<MudDivider />
+<MudMenuItem OnClick="@(() => Reset(ResetMode.Soft))">Reset @(W.CurrentBranch ?? "HEAD") here — soft (keep index)</MudMenuItem>
+<MudMenuItem OnClick="@(() => Reset(ResetMode.Mixed))">Reset @(W.CurrentBranch ?? "HEAD") here — mixed (keep files)</MudMenuItem>
+<MudMenuItem OnClick="@(() => Reset(ResetMode.Hard))"><span class="gf-danger">Reset @(W.CurrentBranch ?? "HEAD") here — hard (discard)…</span></MudMenuItem>
+<MudDivider />
+<MudMenuItem Icon="@Icons.Material.Outlined.ContentCopy" OnClick="CopySha">Copy SHA</MudMenuItem>
+
+@code {
+    [Parameter, EditorRequired] public CommitInfo Commit { get; set; } = default!;
+
+    private Task Run(string label, Func<IGitRepository, Task> op, string? success = null) => W.RunAsync(label, (r, _) => op(r), success);
+
+    private Task Checkout() => Run($"Checking out {Commit.ShortSha}", r => r.Branches.CheckoutAsync(Commit.Sha));
+
+    private async Task NewBranch()
+    {
+        var name = await TextPromptDialog.ShowAsync(Dialogs, $"New branch at {Commit.ShortSha}", "Branch name", string.Empty, validateRef: true);
+        if (name is not null) await Run($"Creating {name}", r => r.Branches.CreateAsync(name, Commit.Sha, checkout: true), $"Created and checked out {name}");
+    }
+
+    private async Task NewTag()
+    {
+        var name = await TextPromptDialog.ShowAsync(Dialogs, $"New tag at {Commit.ShortSha}", "Tag name", string.Empty, validateRef: true);
+        if (name is null) return;
+        var message = await TextPromptDialog.ShowAsync(Dialogs, "Tag message", "Message (leave empty for a lightweight tag)", string.Empty, allowEmpty: true, multiline: true);
+        if (message is null) return;
+        await Run($"Tagging {name}", r => r.Branches.CreateTagAsync(name, Commit.Sha, message), $"Created tag {name}");
+    }
+
+    private Task CherryPick() => Run($"Cherry-picking {Commit.ShortSha}", r => r.History.CherryPickAsync([Commit.Sha]));
+
+    private async Task Revert()
+    {
+        if (await Dialogs.ShowMessageBoxAsync("Revert commit", $"Create a new commit that reverts {Commit.ShortSha} \"{Commit.Subject}\"?", yesText: "Revert", cancelText: "Cancel") == true)
+        {
+            await Run($"Reverting {Commit.ShortSha}", r => r.History.RevertAsync(Commit.Sha));
+        }
+    }
+
+    private async Task Reset(ResetMode mode)
+    {
+        if (mode == ResetMode.Hard &&
+            await Dialogs.ShowMessageBoxAsync("Hard reset", $"Move {W.CurrentBranch ?? "HEAD"} to {Commit.ShortSha} and DISCARD all uncommitted changes? Committed work stays recoverable via the reflog.", yesText: "Reset hard", cancelText: "Cancel") != true)
+        {
+            return;
+        }
+
+        await Run($"Resetting to {Commit.ShortSha}", r => r.History.ResetAsync(Commit.Sha, mode));
+    }
+
+    private async Task InteractiveRebase()
+    {
+        if (!W.Status.IsClean)
+        {
+            W.Info("Commit or stash your changes before an interactive rebase.", Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters<InteractiveRebaseDialog> { { d => d.BaseSha, Commit.Sha } };
+        var dialog = await Dialogs.ShowAsync<InteractiveRebaseDialog>($"Interactive rebase onto {Commit.ShortSha}", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true });
+        await dialog.Result;
+    }
+
+    private async Task CopySha()
+    {
+        await JS.InvokeVoidAsync("gitforge.copyText", Commit.Sha);
+        W.Info($"Copied {Commit.ShortSha}");
+    }
+}
