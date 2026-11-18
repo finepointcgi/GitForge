@@ -1,0 +1,13 @@
+@* One changed file in a read-only list (stash preview, commit comparison). *@
+<div class="gf-file-row @(Selected ? "selected" : null)" title="@(Change.OldPath is null ? Change.Path : $"{Change.OldPath} → {Change.Path}")" @onclick="OnClick">
+    <StatusGlyph Kind="Change.Kind" />
+    <span class="gf-ellipsis gf-grow"><span class="gf-filename">@System.IO.Path.GetFileName(Change.Path)</span> <span class="gf-dim">@System.IO.Path.GetDirectoryName(Change.Path)?.Replace('\\', '/')</span></span>
+    <LfsBadge Path="@Change.Path" State="W.Lfs" />
+</div>
+
+@code {
+    [Inject] private RepoWorkspace W { get; set; } = default!;
+    [Parameter, EditorRequired] public FileChange Change { get; set; } = default!;
+    [Parameter] public bool Selected { get; set; }
+    [Parameter] public EventCallback OnClick { get; set; }
+}

@@ -66,7 +66,8 @@
     else
     {
         <DiffViewer Diff="_diff" Loading="_loading" Area="_file?.Area" HasFocus="@(!W.PanelFocused)"
-                    Placeholder="@(_gone ? "This file no longer has changes." : "No changes to show")" OnApply="ApplyLines" OnReload="LoadAsync" />
+                    Placeholder="@(_gone ? "This file no longer has changes." : "No changes to show")" OnApply="ApplyLines" OnReload="LoadAsync"
+                    CanStash="CanStash" OnStash="StashLines" />
     }
 </div>
 
@@ -79,6 +80,10 @@
             || _file is { Kind: not (FileChangeKind.Untracked or FileChangeKind.Added or FileChangeKind.Conflicted or FileChangeKind.Deleted) });
     private FileStatusEntry? _file;
     private FileDiff? _diff;
+
+    // Line stashing mirrors "git stash push --patch": tracked, modified files only, and none of the file may be staged.
+    private bool CanStash => _file is { Area: StagingArea.Unstaged, Kind: FileChangeKind.Modified } f && _diff is { IsNewFile: false }
+        && W.Snapshot?.HeadSha is not null && !W.Status.Staged.Any(s => s.Path == f.Path);
     private bool _loading;
     private bool _gone;
     private int _version;
@@ -168,21 +173,41 @@
     private async Task DiscardFile()
     {
         if (_file is not { } f) return;
-        if (await Dialogs.ShowMessageBoxAsync("Discard changes", $"Discard all changes to '{f.Path}'? Ctrl+Z restores them until your next action.", yesText: "Discard", cancelText: "Cancel") != true) return;
+        var question = f.Kind == FileChangeKind.Untracked
+            ? $"Delete the new file '{f.Path}'? {Keymap.UndoName(W.Settings)} restores it until your next action."
+            : $"Discard all changes to '{f.Path}'? {Keymap.UndoName(W.Settings)} restores them until your next action.";
+        if (await Dialogs.ShowMessageBoxAsync("Discard changes", question, yesText: "Discard", cancelText: "Cancel") != true) return;
         await W.RunUndoableAsync("Discarding", r => UndoableOperations.DiscardAsync(r, () => r.Index.DiscardAsync([f]), [f.Path]));
     }
 
     private async Task ApplyLines((IReadOnlySet<LineRef> Lines, PatchAction Action) e)
     {
         if (_diff is not { } diff || _file is not { } f) return;
+
+        // An untracked file without any of its lines is no file at all: discarding everything deletes it.
+        if (e.Action == PatchAction.Discard && f.Kind == FileChangeKind.Untracked && PatchBuilder.SelectsAllChanges(diff, e.Lines))
+        {
+            await DiscardFile();
+            return;
+        }
+
         if (e.Action == PatchAction.Discard)
         {
-            if (await Dialogs.ShowMessageBoxAsync("Discard lines", $"Discard {e.Lines.Count} changed line(s)? Ctrl+Z restores them until your next action.", yesText: "Discard", cancelText: "Cancel") != true) return;
+            if (await Dialogs.ShowMessageBoxAsync("Discard lines", $"Discard {e.Lines.Count} changed line(s)? {Keymap.UndoName(W.Settings)} restores them until your next action.", yesText: "Discard", cancelText: "Cancel") != true) return;
             await W.RunUndoableAsync("Discarding lines", r => UndoableOperations.DiscardAsync(r, () => r.Index.ApplySelectionAsync(diff, e.Lines, e.Action), [f.Path]));
             return;
         }
 
         await W.RunAsync(e.Action == PatchAction.Stage ? "Staging lines" : "Unstaging lines", (r, _) => r.Index.ApplySelectionAsync(diff, e.Lines, e.Action));
+    }
+
+    private async Task StashLines(IReadOnlySet<LineRef> lines)
+    {
+        if (_diff is not { } diff) return;
+        var message = await TextPromptDialog.ShowAsync(Dialogs, "Stash lines", "Stash message (optional)", string.Empty, allowEmpty: true);
+        if (message is null) return;
+        await W.RunAsync("Stashing lines", (r, _) => r.Stashes.SaveSelectionAsync(diff, lines, message),
+            $"Stashed {lines.Count} line{(lines.Count == 1 ? string.Empty : "s")}. Pop the stash to bring {(lines.Count == 1 ? "it" : "them")} back.");
     }
 
     public void Dispose() => W.Changed -= OnChanged;

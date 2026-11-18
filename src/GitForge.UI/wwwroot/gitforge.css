@@ -403,4 +403,28 @@ textarea.gf-input { height: auto; font-family: inherit; }
 .gf-welcome-brand img { flex: none; }
 .gf-welcome-brand h1 { margin: 0; }
 .gf-welcome-actions { display: flex; gap: 10px; margin: 18px 0 24px; }
-.gf-shortcuts td:first-child { width: 190px; }
+.gf-shortcuts td:first-child { width: 46%; }
+.gf-shortcuts td:last-child { width: 64px; text-align: right; white-space: nowrap; }
+/* Dialogs render outside .gf-shell, so use MudBlazor's palette for the sticky group headers. */
+.gf-shortcuts th { background: var(--mud-palette-surface); color: var(--mud-palette-text-secondary); z-index: 1; }
+
+/* Multi-selection, stash preview, drag and drop */
+.gf-graph-body .gf-grow-row { user-select: none; }
+.gf-ref-row.selected { background: var(--gf-selected); box-shadow: inset 3px 0 0 var(--gf-accent); }
+.gf-multi-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--gf-border); flex: none; }
+.gf-panel-note { padding: 8px 12px; margin: 0; flex: none; }
+.gf-stash-title { flex: 1 1 180px; min-width: 120px; } /* keep the stash name readable; buttons wrap instead */
+.gf-ref-row[draggable="true"], .gf-refpill[draggable="true"] { cursor: grab; }
+.gf-ref-row.drop-target, .gf-refpill.drop-target { outline: 2px dashed var(--gf-accent); outline-offset: -2px; background: var(--gf-selected); }
+.gf-dragging-ref .gf-ref-row *, .gf-dragging-ref .gf-refpill * { pointer-events: none; } /* no enter/leave flicker over child elements */
+
+/* Keyboard shortcut editor */
+.gf-keys { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.gf-key-chip { display: inline-flex; align-items: center; gap: 2px; }
+.gf-key-chip kbd { white-space: nowrap; }
+.gf-key-chip button { border: 0; background: none; color: var(--mud-palette-text-secondary); cursor: pointer; padding: 0 2px; line-height: 1; }
+.gf-key-chip button:hover { color: var(--mud-palette-error); }
+.gf-key-capture { width: 170px; height: 26px; padding: 0 8px; border: 1px solid var(--mud-palette-primary); border-radius: 4px; background: transparent; color: var(--mud-palette-text-primary); font: inherit; }
+.gf-shortcuts tr.changed td:first-child { font-weight: 600; }
+.gf-shortcuts-filter { margin-bottom: 8px; }
+.gf-shortcuts-scroll { max-height: 60vh; overflow: auto; }

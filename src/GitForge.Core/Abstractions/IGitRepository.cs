@@ -79,7 +79,11 @@ public interface IIndexOperations
     /// <summary>Discards working-tree changes; untracked files are deleted. Destructive.</summary>
     Task DiscardAsync(IReadOnlyCollection<FileStatusEntry> files, CancellationToken cancellationToken = default);
 
-    /// <summary>Stages, unstages, or discards a hunk/line selection via a generated partial patch.</summary>
+    /// <summary>
+    /// Stages, unstages, or discards a hunk/line selection via a generated partial patch. Works for new (untracked or
+    /// added) files too: staging creates the index entry with only the selected lines; unstaging every line removes the
+    /// entry; discarding every line of a new file leaves it empty (use <see cref="DiscardAsync"/> to delete it).
+    /// </summary>
     Task ApplySelectionAsync(FileDiff diff, IReadOnlySet<LineRef> selection, PatchAction action, CancellationToken cancellationToken = default);
 
     Task<string> CommitAsync(CommitRequest request, CancellationToken cancellationToken = default);
@@ -132,11 +136,28 @@ public interface IStashOperations
 {
     Task SaveAsync(StashRequest request, CancellationToken cancellationToken = default);
 
-    /// <summary>Applies or pops a stash. Refuses when the working tree has conflicts in progress.</summary>
+    /// <summary>
+    /// Applies or pops a stash. Refuses when the working tree has conflicts in progress. When the stash touches files
+    /// with uncommitted edits (which <c>git stash apply</c> refuses), its changes are applied as one atomic patch instead,
+    /// so stashed lines can come back next to the lines that were kept.
+    /// </summary>
     Task ApplyAsync(int index, bool pop, bool restoreIndex, CancellationToken cancellationToken = default);
 
     Task DropAsync(int index, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<FileChange>> GetChangesAsync(int index, CancellationToken cancellationToken = default);
+
+    /// <summary>Files in the stash commit <paramref name="stashSha"/>: tracked changes, then untracked files it saved.</summary>
+    Task<StashContents> GetContentsAsync(string stashSha, CancellationToken cancellationToken = default);
+
+    /// <summary>Diff of one stashed file against the commit the stash was made on (untracked files show as added).</summary>
+    Task<FileDiff?> GetDiffAsync(StashContents stash, StashFile file, DiffOptions options, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves a hunk/line selection of one tracked file from the working tree into a new stash: the
+    /// <c>git stash push --patch</c> equivalent. The stash's working tree is HEAD plus the selected lines; its index is the
+    /// current index. Refuses files with staged changes (the selection would mix staged and unstaged content).
+    /// </summary>
+    Task SaveSelectionAsync(FileDiff diff, IReadOnlySet<LineRef> selection, string? message, CancellationToken cancellationToken = default);
 }
 
 public interface IHistoryOperations

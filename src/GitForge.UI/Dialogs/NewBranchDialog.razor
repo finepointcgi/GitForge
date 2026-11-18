@@ -35,6 +35,6 @@
         Dialog.Close();
         var name = _name.Trim();
         var start = string.IsNullOrWhiteSpace(_start) ? "HEAD" : _start.Trim();
-        await W.RunUndoableAsync($"Creating {name}", r => UndoableOperations.CreateBranchAsync(r, name, start, _checkout), $"Created {name} (Ctrl+Z to undo)");
+        await W.RunUndoableAsync($"Creating {name}", r => UndoableOperations.CreateBranchAsync(r, name, start, _checkout), $"Created {name} ({Keymap.UndoName(W.Settings)} reverses it)");
     }
 }

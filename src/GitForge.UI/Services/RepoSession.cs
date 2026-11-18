@@ -33,6 +33,11 @@ public sealed class RepoSession : IAsyncDisposable
     public DiffTarget? OpenDiff { get; internal set; }
     public FileViewTarget? OpenFileView { get; internal set; }
     public BranchCompareTarget? BranchCompare { get; internal set; }
+    public CommitCompareTarget? CommitCompare { get; internal set; }
+    public string? OpenStashSha { get; internal set; }
+
+    /// <summary>Commits picked with Ctrl+click or Shift+click in the graph (besides <see cref="SelectedCommitSha"/>).</summary>
+    public HashSet<string> MultiSelection { get; } = new(StringComparer.Ordinal);
     public bool PanelFocused { get; set; }
 
     // Git LFS: tracked patterns/files and server locks (looked up by path).

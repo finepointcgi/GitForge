@@ -68,7 +68,8 @@ public class DiffAndPatchTests
 
         Assert.Equal(3, files.Count);
         Assert.True(files[0].IsNewFile);
-        Assert.False(files[0].SupportsPartialStaging);
+        Assert.True(files[0].SupportsPartialStaging);
+        Assert.False(files[1].SupportsPartialStaging);
         Assert.True(files[1].IsBinary);
         Assert.Equal("café.txt", files[2].Path);
     }
@@ -115,6 +116,30 @@ public class DiffAndPatchTests
         // Reverse patches match the post-image: unselected '+' becomes context, unselected '-' disappears.
         // Old side gains line2 back; new side (current index) is unchanged: 5 old lines, 4 new lines.
         Assert.Contains("@@ -1,5 +1,4 @@\n line1\n-line2\n line2 changed\n line3\n line4\n", patch, StringComparison.Ordinal);
+    }
+
+    private const string NewFileDiff =
+        "diff --git a/n.txt b/n.txt\nnew file mode 100644\nindex 0000000..4cb29ea\n--- /dev/null\n+++ b/n.txt\n@@ -0,0 +1,3 @@\n+one\n+two\n+three\n";
+
+    [Fact]
+    public void NewFile_StageSelection_CreatesFileWithOnlySelectedLines()
+    {
+        var diff = UnifiedDiffParser.ParseSingle(NewFileDiff)!;
+        var patch = PatchBuilder.Build(diff, new HashSet<LineRef> { new(0, 0), new(0, 2) }, PatchAction.Stage);
+
+        Assert.Equal("diff --git a/n.txt b/n.txt\nnew file mode 100644\nindex 0000000..4cb29ea\n--- /dev/null\n+++ b/n.txt\n@@ -0,0 +1,2 @@\n+one\n+three\n", patch);
+    }
+
+    [Fact]
+    public void NewFile_ReverseSelection_IsWrittenAsModification()
+    {
+        var diff = UnifiedDiffParser.ParseSingle(NewFileDiff)!;
+        var patch = PatchBuilder.Build(diff, new HashSet<LineRef> { new(0, 1) }, PatchAction.Unstage);
+
+        // No "new file mode" or blob ids, and "--- a/": git apply edits the existing copy instead of deleting it.
+        Assert.Equal("diff --git a/n.txt b/n.txt\n--- a/n.txt\n+++ b/n.txt\n@@ -1,2 +1,3 @@\n one\n+two\n three\n", patch);
+        Assert.True(PatchBuilder.SelectsAllChanges(diff, PatchBuilder.SelectHunk(diff.Hunks[0])));
+        Assert.False(PatchBuilder.SelectsAllChanges(diff, new HashSet<LineRef> { new(0, 1) }));
     }
 
     [Fact]

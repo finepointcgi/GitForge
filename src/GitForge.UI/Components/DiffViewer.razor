@@ -18,6 +18,10 @@
             @if (Area == StagingArea.Unstaged)
             {
                 <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => Apply(PatchAction.Stage, _selection))">Stage lines (s)</MudButton>
+                @if (CanStashLines)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => Stash(_selection))" title="Move the selected lines into a new stash">Stash lines</MudButton>
+                }
                 <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => Apply(PatchAction.Discard, _selection))">Discard lines (d)</MudButton>
             }
             else if (Area == StagingArea.Staged)
@@ -59,7 +63,7 @@
             <Virtualize Items="_sideRows" ItemSize="20" OverscanCount="40" Context="r">
                 @if (r.IsHunkHeader)
                 {
-                    <HunkHeader Hunk="r.Hunk" Area="Area" CanApply="CanSelectLines" OnApply="ApplyHunk" />
+                    <HunkHeader Hunk="r.Hunk" Area="Area" CanApply="CanSelectLines" OnApply="ApplyHunk" CanStash="CanStashLines" OnStash="StashHunk" />
                 }
                 else
                 {
@@ -79,7 +83,7 @@
             <Virtualize Items="_rows" ItemSize="20" OverscanCount="40" Context="r">
                 @if (r.IsHunkHeader)
                 {
-                    <HunkHeader Hunk="r.Hunk" Area="Area" CanApply="CanSelectLines" OnApply="ApplyHunk" />
+                    <HunkHeader Hunk="r.Hunk" Area="Area" CanApply="CanSelectLines" OnApply="ApplyHunk" CanStash="CanStashLines" OnStash="StashHunk" />
                 }
                 else
                 {
@@ -115,6 +119,10 @@
     [Parameter] public EventCallback<(IReadOnlySet<LineRef> Lines, PatchAction Action)> OnApply { get; set; }
     [Parameter] public EventCallback OnReload { get; set; }
 
+    /// <summary>Set when selected lines can be moved into a new stash (see <see cref="IStashOperations.SaveSelectionAsync"/>).</summary>
+    [Parameter] public bool CanStash { get; set; }
+    [Parameter] public EventCallback<IReadOnlySet<LineRef>> OnStash { get; set; }
+
     private FileDiff? _rendered;
     private List<DiffRow> _rows = [];
     private List<SideBySideRow> _sideRows = [];
@@ -125,6 +133,7 @@
     private int _anchor = -1;
 
     private bool CanSelectLines => Area is not null && Diff?.SupportsPartialStaging == true && !W.Settings.IgnoreWhitespace;
+    private bool CanStashLines => CanStash && CanSelectLines && Area == StagingArea.Unstaged;
 
     protected override void OnInitialized() => Shortcuts.Command += OnCommand;
 
@@ -211,6 +220,16 @@
     }
 
     private Task ApplyHunk((DiffHunk Hunk, PatchAction Action) e) => Apply(e.Action, PatchBuilder.SelectHunk(e.Hunk));
+
+    private Task StashHunk(DiffHunk hunk) => Stash(PatchBuilder.SelectHunk(hunk));
+
+    private async Task Stash(IReadOnlySet<LineRef> lines)
+    {
+        if (lines.Count == 0) return;
+        var copy = new HashSet<LineRef>(lines);
+        ClearSelection();
+        await OnStash.InvokeAsync(copy);
+    }
 
     private async Task Apply(PatchAction action, IReadOnlySet<LineRef> lines)
     {

@@ -16,7 +16,7 @@ flowchart LR
     subgraph UI["GitForge.UI (Razor class library, MudBlazor)"]
         Shell["GitForgeApp shell<br/>toolbar · sidebar · 3 panes"]
         WS["RepoWorkspace<br/>per-window state"]
-        KB["ShortcutService<br/>+ gitforge.js"]
+        KB["ShortcutService · Keymap<br/>+ gitforge.js"]
         Views["RepoTabs · LeftPanel · GraphView · CommitPanel<br/>DiffPane · ConflictEditor · FileHistoryView · BlameView<br/>ReflogView · CommandPalette"]
     end
 
@@ -157,11 +157,13 @@ record DiffLine(DiffLineKind Kind, string Text, int? OldLineNumber, int? NewLine
 record DiffHunk(int Index, int OldStart, int OldCount, int NewStart, int NewCount, string Section, IReadOnlyList<DiffLine> Lines);
 record FileDiff(string? OldPath, string? NewPath, IReadOnlyList<string> HeaderLines, IReadOnlyList<DiffHunk> Hunks, bool IsBinary);
 readonly record struct LineRef(int HunkIndex, int LineIndex);
-enum PatchAction { Stage, Unstage, Discard }
+enum PatchAction { Stage, Unstage, Discard }   // stashing lines uses Stage (into a temporary index) and Discard
 static class PatchBuilder { string? Build(FileDiff diff, IReadOnlySet<LineRef> selection, PatchAction action); }
 ```
 
 Forward patches (stage) must match the old side: unselected deletions become context, unselected additions are dropped. Reverse patches (unstage, discard) must match the new side: unselected additions become context, unselected deletions are dropped. Hunk starts are re-based by the running line delta. The result is piped to `git apply [--cached] [--reverse]` on stdin.
+
+New files (untracked or newly added) work the same way. Staging sends a new-file patch holding only the selected lines, which creates the index entry; the diff text is already normalized the way `git add` would store it, so CRLF files are staged with LF. Unstaging and discarding rewrite the header as a modification (`--- a/<path>`), so they remove lines without deleting the file; unstaging every line removes the index entry instead, and discarding every line of an untracked file deletes it (undoable).
 
 ### Service interfaces
 
@@ -169,7 +171,27 @@ Forward patches (stage) must match the old side: unselected deletions become con
 
 ### UI model
 
-The window is three resizable panes. The left panel lists refs (local branches grouped into folders, remotes, pull requests, tags, stashes, submodules). The center shows the commit graph by default; a diff or the reflog opens over it and Esc returns. The right commit panel follows the selection: the **WIP row** (uncommitted changes, always the top row: a dashed node joined to HEAD by a dashed connector in a lane that no row above HEAD uses, chosen by `WorkingTreeLane.Choose`) shows unstaged/staged files and the commit message (summary + description); a commit shows its details and changed files. `RepoWorkspace` owns this selection state (`WipSelected`, `SelectedCommitSha`, `Center`, `OpenDiff`) plus hide/solo ref filters, which re-stream history with an explicit tip list passed to `git log --stdin`.
+The window is three resizable panes. The left panel lists refs (local branches grouped into folders, remotes, pull requests, tags, stashes, submodules). The center shows the commit graph by default; a diff, the reflog, file history, blame, branch changes, a stash preview, or a comparison opens over it and Esc returns. The right commit panel follows the selection: the **WIP row** (uncommitted changes, always the top row: a dashed node joined to HEAD by a dashed connector in a lane that no row above HEAD uses, chosen by `WorkingTreeLane.Choose`) shows unstaged/staged files and the commit message (summary + description); a commit shows its details and changed files. `RepoWorkspace` owns this selection state (`WipSelected`, `SelectedCommitSha`, `Center`, `OpenDiff`) plus hide/solo ref filters, which re-stream history with an explicit tip list passed to `git log --stdin`.
+
+### Stash preview and line stashing
+
+`IStashOperations.GetContentsAsync` reads a stash commit's parents (`git rev-list --parents`): changes to tracked files are `git diff <base> <stash>`, and untracked files (third parent, a root commit) are listed with `git ls-tree` and shown as added. Clicking a stash opens it in the center pane with apply, pop, and drop.
+
+`SaveSelectionAsync` is the `git stash push --patch` equivalent. A temporary index (`GIT_INDEX_FILE`) starts at HEAD and receives the selected lines; `git write-tree` gives the stash's working tree, the real index gives its index commit, `git commit-tree --no-gpg-sign` builds both commits with git's own messages, and `git stash store` records it. A dry run (`git apply --check`) proves the lines can be removed from the working tree before anything is stored. Files with staged changes are refused, because the selection would mix staged and unstaged content. `git stash apply` refuses any file with uncommitted edits, even when they don't overlap, which is the usual state after stashing some lines; in that case `ApplyAsync` applies the stash's diff with `git apply`, which is atomic (all hunks or none), and pop drops the stash only on success.
+
+### Multi-selection, comparison, and cherry-pick
+
+Ctrl+click toggles a commit and Shift+click (or Shift+↓/↑) selects a range of graph rows from an anchor; `RepoSession.MultiSelection` holds the set. Cherry-pick applies the selection oldest first: the graph is in date order with every parent below its children, so ordering by row descending never puts a commit before its ancestor. Merge commits are refused. If git refuses before the first pick (local changes in the way), the empty sequence it leaves is cleared with `git cherry-pick --quit`, so a refusal changes nothing; a stop after some picks stays in progress. `.git/sequencer` without `CHERRY_PICK_HEAD` is reported as a cherry-pick (or revert) in progress, because libgit2 does not report it and git refuses new ones until it is continued or aborted.
+
+Comparing two commits (or a commit and the working tree) runs `git diff A B`, lists `git log A..B`, and orders the sides older to newer by graph position; swap reverses them.
+
+### Branch drag and drop
+
+Sidebar branch rows and graph branch labels are HTML5 drag sources; local branches are drop targets. `RepoWorkspace.DraggedBranch` carries the source across components. A drop asks whether to merge the dragged branch into the target (checking the target out first when needed) or rebase it onto the target (checking it out first); remote-tracking branches can only be merged. The same actions stay on the branch context menu for keyboard users.
+
+### Keyboard shortcuts
+
+`Keymap` is the command catalog (id, group, description, default chords) and the chord grammar. Chords are canonical and layout-aware: modifiers in the order ctrl, alt, shift, then the key as the browser reports it, lower-cased (`ctrl+shift+f`, `shift+g`, `?`); Shift counts only for letters and named keys. Two-step sequences such as `g g` are supported. `AppSettings.KeyBindings` stores only commands the user changed. `ShortcutService` builds the chord tables and sends gitforge.js the exact list of chords to capture, so unbound keys are never intercepted; F5 is always swallowed so the app can't reload itself. Single-key chords (j, ?, Space) fire only outside text fields and only while vim-style navigation is on; chords with Ctrl or Alt, function keys, and Esc also fire while typing, except undo and redo, which stay native in text fields. The editor detects clashes (including a key that would hide a sequence), moves a chord after confirmation, and refuses keys that must keep their meaning (Tab, Ctrl+C/X/V/A, Alt+F4). Tooltips, menus, and the command palette read labels from the live keymap.
 
 ### Tabs
 
@@ -210,7 +232,7 @@ Each open repository is a `RepoSession` (git handle, snapshot, graph rows, selec
 - **HTTPS by default** for hosting APIs. Cloud providers are fixed to HTTPS. A self-hosted account may be configured with an `http://` URL after an explicit warning and confirmation (the token then travels unencrypted); it is tagged **HTTP** in the UI. Per-request policy (`HostingDefaults.IsRequestAllowed`) permits plain HTTP only for such accounts and only to the configured host and port, so HTTPS accounts are never downgraded and pagination links cannot redirect a token to another host. Schemes other than `http`/`https` are rejected.
 - **Git authentication** is delegated to the user's Git configuration (Git Credential Manager, SSH agent, proxies, custom CA settings), so existing enterprise controls apply unchanged.
 - **Command execution.** Processes start with an argv list (never a shell). Ref names are validated against `git check-ref-format` rules, revisions starting with `-` are rejected, `--end-of-options` and `--literal-pathspecs` are used where applicable, and large path lists go through stdin (`--pathspec-from-file`). Interactive-rebase todo files accept only hex SHAs.
-- **Hooks and signing are honored.** All commits, including reworded commits during interactive rebase, run through `git commit`, so pre-commit/commit-msg hooks and GPG/SSH/X.509 signing policies apply.
+- **Hooks and signing are honored.** Every commit made on a branch, including reworded commits during interactive rebase, runs through `git commit`, so pre-commit/commit-msg hooks and GPG/SSH/X.509 signing policies apply. Stash entries are the one exception, as in git itself: `git stash` neither runs hooks nor signs, and "Stash lines" builds its stash commits with `git commit-tree --no-gpg-sign` to match.
 - **Desktop hardening.** Release builds disable WebView2 dev tools and browser accelerator keys; the manifest requests `asInvoker` (never elevates).
 - **Dev host.** Binds to a loopback IP only and rejects non-loopback `Host` and cross-origin `Origin` headers (blocks DNS rebinding and cross-site WebSocket hijacking). It is for development, not deployment.
 

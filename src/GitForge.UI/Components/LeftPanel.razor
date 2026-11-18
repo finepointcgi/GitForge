@@ -5,7 +5,7 @@
 @inject IAccountService Accounts
 @inject IPlatformShell Shell
 
-<div class="gf-left-inner">
+<div class="gf-left-inner @(W.DraggedBranch is not null ? "gf-dragging-ref" : null)">
     @if (W.Snapshot is { } s)
     {
         <div class="gf-left-filter">
@@ -38,8 +38,11 @@
                         var hidden = W.HiddenRefs.Contains(b.CanonicalName);
                         <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
                             <ActivatorContent Context="menu">
-                                <div class="gf-ref-row @(b.IsCurrent ? "current" : null) @(hidden ? "hidden-ref" : null) @(group.Key is null ? null : "nested") @(W.SoloRef == b.CanonicalName ? "solo" : null)"
-                                     title="@(b.UpstreamName is null ? b.CanonicalName : $"{b.CanonicalName} → {b.UpstreamName}{(b.IsUpstreamGone ? " (deleted on the remote)" : null)}")"
+                                <div class="gf-ref-row @(b.IsCurrent ? "current" : null) @(hidden ? "hidden-ref" : null) @(group.Key is null ? null : "nested") @(W.SoloRef == b.CanonicalName ? "solo" : null) @(_dropOn == b.CanonicalName ? "drop-target" : null)"
+                                     title="@((b.UpstreamName is null ? b.CanonicalName : $"{b.CanonicalName} → {b.UpstreamName}{(b.IsUpstreamGone ? " (deleted on the remote)" : null)}") + "\nDrag onto another branch to merge or rebase")"
+                                     draggable="true" @ondragstart="@(() => W.BeginBranchDrag(b))" @ondragend="W.EndBranchDrag"
+                                     @ondragenter="@(() => DragEnter(b))" @ondragleave="@(() => DragLeave(b))"
+                                     @ondragover:preventDefault="true" @ondrop:preventDefault="true" @ondrop="@(() => Drop(b))"
                                      @oncontextmenu="@(e => menu.OpenAsync(e))" @onclick="@(() => Reveal(b.TipSha))" @ondblclick="@(() => Checkout(b))">
                                     <MudIcon Icon="@(b.IsCurrent ? Icons.Material.Filled.CheckCircle : Icons.Material.Outlined.Computer)" Size="Size.Small" Class="@(b.IsCurrent ? "gf-current-icon" : "gf-dim")" />
                                     <span class="gf-ellipsis gf-grow">@(group.Key is null ? b.Name : b.Name[(group.Key.Length + 1)..])</span>
@@ -97,7 +100,8 @@
                         var hidden = W.HiddenRefs.Contains(b.CanonicalName);
                         <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
                             <ActivatorContent Context="menu">
-                                <div class="gf-ref-row nested @(hidden ? "hidden-ref" : null) @(W.SoloRef == b.CanonicalName ? "solo" : null)" title="@b.CanonicalName"
+                                <div class="gf-ref-row nested @(hidden ? "hidden-ref" : null) @(W.SoloRef == b.CanonicalName ? "solo" : null)" title="@(b.CanonicalName + "\nDrag onto a local branch to merge")"
+                                     draggable="true" @ondragstart="@(() => W.BeginBranchDrag(b))" @ondragend="W.EndBranchDrag"
                                      @oncontextmenu="@(e => menu.OpenAsync(e))" @onclick="@(() => Reveal(b.TipSha))" @ondblclick="@(() => CheckoutRemote(b))">
                                     <MudIcon Icon="@Icons.Material.Outlined.Cloud" Size="Size.Small" Class="gf-dim" />
                                     <span class="gf-ellipsis gf-grow">@b.Name[(remote.Name.Length + 1)..]</span>
@@ -180,12 +184,15 @@
             {
                 <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
                     <ActivatorContent Context="menu">
-                        <div class="gf-ref-row" title="@($"{st.RefSpec} · {st.When.LocalDateTime:g}")" @oncontextmenu="@(e => menu.OpenAsync(e))" @ondblclick="@(() => ApplyStash(st, false))">
+                        <div class="gf-ref-row @(W.Center == CenterView.Stash && W.OpenStashSha == st.Sha ? "selected" : null)"
+                             title="@($"{st.RefSpec} · {st.When.LocalDateTime:g}\nClick to preview · double-click to apply")"
+                             @oncontextmenu="@(e => menu.OpenAsync(e))" @onclick="@(() => W.ShowStash(st))" @ondblclick="@(() => ApplyStash(st, false))">
                             <MudIcon Icon="@Icons.Material.Outlined.Inventory2" Size="Size.Small" Class="gf-dim" />
                             <span class="gf-ellipsis gf-grow">@st.Message</span>
                         </div>
                     </ActivatorContent>
                     <ChildContent>
+                        <MudMenuItem OnClick="@(() => W.ShowStash(st))">Show changes</MudMenuItem>
                         <MudMenuItem OnClick="@(() => ApplyStash(st, false))">Apply</MudMenuItem>
                         <MudMenuItem OnClick="@(() => ApplyStash(st, true))">Pop (apply and drop)</MudMenuItem>
                         <MudMenuItem OnClick="@(() => DropStash(st))"><span class="gf-danger">Drop…</span></MudMenuItem>
@@ -292,6 +299,7 @@
 
 @code {
     private string _filter = string.Empty;
+    private string? _dropOn; // local branch under a dragged branch
     private bool _localOpen = true, _remoteOpen = true, _prsOpen = true, _tagsOpen, _stashesOpen = true, _submodulesOpen = true, _lfsOpen = true;
     private readonly HashSet<string> _closedFolders = [];
     private IReadOnlyList<HostedPullRequest>? _prs;
@@ -392,6 +400,22 @@
         W.SelectCommit(sha, reveal: true);
     }
 
+    private void DragEnter(BranchHead b)
+    {
+        if (BranchDragDrop.CanDrop(W.DraggedBranch, b)) _dropOn = b.CanonicalName;
+    }
+
+    private void DragLeave(BranchHead b)
+    {
+        if (_dropOn == b.CanonicalName) _dropOn = null;
+    }
+
+    private Task Drop(BranchHead b)
+    {
+        _dropOn = null;
+        return BranchDragDrop.DropAsync(W, Dialogs, b);
+    }
+
     private Task Checkout(BranchHead b) => b.IsCurrent ? Task.CompletedTask : W.CheckoutAsync(b.Name);
 
     private Task CheckoutRemote(BranchHead b)
@@ -468,9 +492,9 @@
 
     private async Task Delete(BranchHead b)
     {
-        var result = await Dialogs.ShowMessageBoxAsync("Delete branch", $"Delete local branch '{b.Name}'? Ctrl+Z restores it until your next action.", yesText: "Delete", noText: "Force delete", cancelText: "Cancel");
+        var result = await Dialogs.ShowMessageBoxAsync("Delete branch", $"Delete local branch '{b.Name}'? {Keymap.UndoName(W.Settings)} restores it until your next action.", yesText: "Delete", noText: "Force delete", cancelText: "Cancel");
         if (result is null) return;
-        await W.RunUndoableAsync($"Deleting {b.Name}", r => UndoableOperations.DeleteBranchAsync(r, b.Name, force: result == false), $"Deleted {b.Name} (Ctrl+Z to undo)");
+        await W.RunUndoableAsync($"Deleting {b.Name}", r => UndoableOperations.DeleteBranchAsync(r, b.Name, force: result == false), $"Deleted {b.Name} ({Keymap.UndoName(W.Settings)} reverses it)");
     }
 
     private async Task DeleteRemote(BranchHead b)

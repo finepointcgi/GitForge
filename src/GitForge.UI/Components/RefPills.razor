@@ -1,8 +1,17 @@
-@* Branch/tag labels for one commit. A local branch and its same-named remote branch at the same commit share one pill. *@
+@inject RepoWorkspace W
+@inject IDialogService Dialogs
+
+@* Branch/tag labels for one commit. A local branch and its same-named remote branch at the same commit share one pill.
+   Branch pills can be dragged onto another branch (pill or sidebar row) to merge or rebase; local branch pills accept drops. *@
 @if (_pills.Count > 0)
 {
     var first = _pills[0];
-    <span class="gf-refpill @(first.Current ? "current" : null) @(first.IsTag ? "tag" : null)" style="--gf-lane:@LaneColor" title="@first.Tooltip">
+    var branch = BranchOf(first);
+    <span class="gf-refpill @(first.Current ? "current" : null) @(first.IsTag ? "tag" : null) @(_dropOn ? "drop-target" : null)" style="--gf-lane:@LaneColor"
+          title="@(branch is null ? first.Tooltip : first.Tooltip + (branch.IsRemote ? "\nDrag onto a local branch to merge" : "\nDrag onto another branch to merge or rebase"))"
+          draggable="@(branch is null ? "false" : "true")" @ondragstart="@(() => DragStart(branch))" @ondragend="W.EndBranchDrag"
+          @ondragenter="@(() => _dropOn = branch is not null && BranchDragDrop.CanDrop(W.DraggedBranch, branch))" @ondragleave="@(() => _dropOn = false)"
+          @ondragover:preventDefault="true" @ondrop:preventDefault="true" @ondrop="@(() => DropAsync(branch))">
         @if (first.Current)
         {
             <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Class="gf-refpill-icon" />
@@ -34,6 +43,29 @@
     private sealed record Pill(string Name, bool Local, bool Remote, bool IsTag, bool Current, string Tooltip);
 
     private List<Pill> _pills = [];
+    private bool _dropOn;
+
+    private BranchHead? BranchOf(Pill p) => W.Snapshot is not { } s ? null
+        : p.Local ? s.LocalBranches.FirstOrDefault(b => b.Name == p.Name)
+        : p.Remote ? s.RemoteBranches.FirstOrDefault(b => b.Name == p.Name)
+        : null;
+
+    private void DragStart(BranchHead? branch)
+    {
+        if (branch is not null) W.BeginBranchDrag(branch);
+    }
+
+    private Task DropAsync(BranchHead? target)
+    {
+        _dropOn = false;
+        if (target is null)
+        {
+            W.EndBranchDrag();
+            return Task.CompletedTask;
+        }
+
+        return BranchDragDrop.DropAsync(W, Dialogs, target);
+    }
 
     protected override void OnParametersSet()
     {

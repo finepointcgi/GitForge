@@ -17,7 +17,7 @@
             <button class="gf-btn gf-btn-ghost" title="Take their side for every conflict" @onclick="@(() => All(ConflictResolution.Theirs))">All theirs</button>
             <button class="gf-btn gf-btn-ghost" title="Discard choices and reload from git" @onclick="LoadAsync">Reset</button>
             <button class="gf-btn gf-btn-ghost" title="Open in your external merge tool" @onclick="LaunchTool">Merge tool…</button>
-            <button class="gf-btn gf-btn-stage" disabled="@(!d.IsFullyResolved || _saving)" title="Ctrl+S" @onclick="SaveAsync">Save and mark resolved</button>
+            <button class="gf-btn gf-btn-stage" disabled="@(!d.IsFullyResolved || _saving)" title="@Keymap.Label(W.Settings, "merge.save")" @onclick="SaveAsync">Save and mark resolved</button>
         }
         else
         {
@@ -47,8 +47,7 @@
     {
         <div class="gf-scroll gf-merge-body">
             <p class="gf-dim gf-small gf-merge-help">
-                Pick a side for each conflict: <kbd>m</kbd> mine, <kbd>t</kbd> theirs, <kbd>b</kbd> both; <kbd>n</kbd>/<kbd>p</kbd> next/previous;
-                <kbd>Ctrl+S</kbd> save. Lines outside conflicts were merged automatically.
+                Pick a side for each conflict@(KeyHelp()). Lines outside conflicts were merged automatically.
             </p>
             @for (var i = 0; i < _doc.Segments.Count; i++)
             {
@@ -102,6 +101,18 @@
 </div>
 
 @code {
+    /// <summary>": m mine, t theirs, b both; n / p next / previous; Ctrl+S save", using the current shortcuts.</summary>
+    private string KeyHelp()
+    {
+        // Single-key shortcuts only work while vim-style navigation is on, so don't advertise them otherwise.
+        string? K(string id) => Keymap.Effective(W.Settings, id).FirstOrDefault(c => W.Settings.VimNavigation || !Keymap.IsSingleKey(c)) is { } chord ? Keymap.Display(chord) : null;
+        var parts = new[] { (K("merge.mine"), "mine"), (K("merge.theirs"), "theirs"), (K("merge.both"), "both"), (K("merge.next"), "next conflict"), (K("merge.prev"), "previous conflict"), (K("merge.save"), "save") }
+            .Where(p => p.Item1 is not null)
+            .Select(p => $"{p.Item1} {p.Item2}")
+            .ToList();
+        return parts.Count == 0 ? string.Empty : ": " + string.Join(" · ", parts);
+    }
+
     [Parameter, EditorRequired] public string Path { get; set; } = string.Empty;
 
     private static readonly (ConflictResolution Res, string Text, string? Key)[] Choices =

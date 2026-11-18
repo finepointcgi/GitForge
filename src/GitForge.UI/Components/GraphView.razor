@@ -9,18 +9,18 @@
 <div class="gf-graph-host" id="gf-graph">
 <div class="gf-graphview" style="--gf-cols:@Columns">
     <div class="gf-graph-toolbar">
-        <MudTooltip Text="Go to the current branch (Ctrl+H)">
+        <MudTooltip Text="@($"Go to the current branch{Keymap.Hint(W.Settings, "graph.head")}")">
             <button class="gf-icon-plain" aria-label="Go to the current branch" @onclick="W.GoToHead">
                 <MudIcon Icon="@Icons.Material.Outlined.MyLocation" Size="Size.Small" />
             </button>
         </MudTooltip>
-        <MudTooltip Text="Everything this branch changes, compared with the branch it came from (Ctrl+4)">
+        <MudTooltip Text="@($"Everything this branch changes, compared with the branch it came from{Keymap.Hint(W.Settings, "view.changes")}")">
             <button class="gf-btn gf-btn-ghost" @onclick="@(() => W.ShowBranchChanges())">
                 <MudIcon Icon="@Icons.Material.Outlined.Difference" Size="Size.Small" /> Branch changes
             </button>
         </MudTooltip>
         <MudIcon Icon="@Icons.Material.Outlined.Search" Size="Size.Small" Class="gf-dim" />
-        <input @ref="_search" class="gf-input gf-input-ghost gf-grow" placeholder="Filter commits — text · sha · author:name · path:src/file · since:2025-01-01   (Ctrl+F)"
+        <input @ref="_search" class="gf-input gf-input-ghost gf-grow" placeholder="@($"Filter commits — text · sha · author:name · path:src/file · since:2025-01-01  {Keymap.Hint(W.Settings, "search.focus")}")"
                value="@_query" @oninput="OnQueryInput" aria-label="Filter commits" />
         @if (_filterBusy)
         {
@@ -68,7 +68,7 @@
         </ChildContent>
     </MudMenu>
 
-    <div class="gf-scroll gf-graph-body @(W.PanelFocused ? null : "focused")" @ref="_scroller" tabindex="0" @onfocus="@(() => W.PanelFocused = false)">
+    <div class="gf-scroll gf-graph-body @(W.PanelFocused ? null : "focused") @(W.DraggedBranch is not null ? "gf-dragging-ref" : null)" @ref="_scroller" tabindex="0" @onfocus="@(() => W.PanelFocused = false)">
         <Virtualize @ref="_virtualize" TItem="GraphItem" ItemsProvider="ProvideAsync" ItemSize="32" OverscanCount="15">
             <ItemContent Context="item">
                 @if (item.IsWip)
@@ -91,9 +91,9 @@
                     var labels = Labels(c.Sha);
                     <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
                         <ActivatorContent Context="menu">
-                            <div class="gf-grow-row gf-graph-grid @(c.Sha == W.SelectedCommitSha && !W.WipSelected ? "selected" : null) @(c.IsMerge ? "merge" : null)"
+                            <div class="gf-grow-row gf-graph-grid @(W.IsCommitSelected(c.Sha) ? "selected" : null) @(c.IsMerge ? "merge" : null)"
                                  style="--gf-lane:@Avatars.LaneColor(item.Row.NodeColorIndex)"
-                                 @oncontextmenu="@(e => menu.OpenAsync(e))" @onclick="@(() => Select(item.Index))" @ondblclick="@(() => CheckoutAt(labels))">
+                                 @oncontextmenu="@(e => menu.OpenAsync(e))" @onclick="@(e => Click(item.Index, e))" @ondblclick="@(() => CheckoutAt(labels))">
                                 <span class="gf-col-ref"><RefPills Labels="labels" LaneColor="@Avatars.LaneColor(item.Row.NodeColorIndex)" /></span>
                                 <span class="gf-col-graph">
                                     @if (!Filtered)
@@ -140,6 +140,7 @@
     private int _headRow = -1;
     private int _wipLane = -1;
     private string? _headRowSha;
+    private string? _anchor; // where Shift+click and Shift+arrow ranges start
     private CancellationTokenSource? _filterCts;
     private readonly Dictionary<string, HashSet<string>> _pathCache = new(StringComparer.Ordinal);
 
@@ -229,9 +230,64 @@
     {
         if (ItemAt(index) is not { } item) return;
         W.PanelFocused = false;
+        _anchor = item.IsWip ? null : item.Row!.Commit.Sha;
         if (item.IsWip) W.SelectWip();
         else W.SelectCommit(item.Row!.Commit.Sha);
         if (scroll) await JS.InvokeVoidAsync("gitforge.scrollRowIntoView", _scroller, index, 32);
+    }
+
+    /// <summary>Click selects one commit; Ctrl+click adds or removes a commit; Shift+click selects the rows from the anchor.</summary>
+    private async Task Click(int index, MouseEventArgs e)
+    {
+        if (ItemAt(index) is not { IsWip: false } item)
+        {
+            await Select(index);
+            return;
+        }
+
+        var sha = item.Row!.Commit.Sha;
+        if (e.CtrlKey || e.MetaKey)
+        {
+            W.PanelFocused = false;
+            _anchor = sha;
+            W.ToggleCommitSelection(sha);
+        }
+        else if (e.ShiftKey && (_anchor ?? (W.WipSelected ? null : W.SelectedCommitSha)) is { } anchor)
+        {
+            SelectRange(anchor, index);
+        }
+        else
+        {
+            await Select(index);
+        }
+    }
+
+    /// <summary>Selects every commit row between the anchor and <paramref name="toIndex"/>; the anchor stays put for the next Shift+click.</summary>
+    private void SelectRange(string anchorSha, int toIndex)
+    {
+        if (ItemAt(toIndex) is not { IsWip: false } target) return;
+        var from = IndexOf(anchorSha);
+        var shas = new List<string>();
+        if (from >= 0)
+        {
+            for (var i = Math.Min(from, toIndex); i <= Math.Max(from, toIndex); i++)
+            {
+                if (ItemAt(i) is { IsWip: false } it) shas.Add(it.Row!.Commit.Sha);
+            }
+        }
+
+        W.PanelFocused = false;
+        W.SelectCommitRange(shas, target.Row!.Commit.Sha);
+    }
+
+    private int IndexOf(string sha)
+    {
+        for (var i = 0; i < VisibleCount; i++)
+        {
+            if (ItemAt(i) is { IsWip: false } item && item.Row!.Commit.Sha == sha) return i;
+        }
+
+        return -1;
     }
 
     private Task SelectWip(int index) => Select(index);
@@ -415,10 +471,21 @@
             return;
         }
 
+        if (command == "escape" && W.MultiSelection.Count > 0)
+        {
+            W.ClearMultiSelection();
+            return;
+        }
+
         if (W.PanelFocused) return;
         var current = SelectedIndex();
         switch (command)
         {
+            case "select.down" or "select.up" when current >= 0 && (_anchor ?? W.SelectedCommitSha) is { } anchor:
+                var next = Math.Clamp(current + (command == "select.down" ? 1 : -1), 0, VisibleCount - 1);
+                SelectRange(anchor, next);
+                await JS.InvokeVoidAsync("gitforge.scrollRowIntoView", _scroller, next, 32);
+                break;
             case "nav.down": await Select(Math.Min(current + 1, VisibleCount - 1), scroll: true); break;
             case "nav.up": await Select(Math.Max(current - 1, 0), scroll: true); break;
             case "nav.top": await Select(0, scroll: true); break;

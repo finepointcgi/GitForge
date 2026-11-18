@@ -1,5 +1,6 @@
 @inject ISettingsStore SettingsStore
 @inject RepoWorkspace W
+@inject IDialogService Dialogs
 
 <MudDialog>
     <DialogContent>
@@ -18,7 +19,11 @@
                     <button type="button" class="gf-link-button" @onclick="@(() => _s.AccentColor = AppSettings.DefaultAccentColor)">Use GitForge green</button>
                 }
             </div>
-            <MudCheckBox T="bool" @bind-Value="_s.VimNavigation" Label="Vim-style navigation (j/k, gg/G, h/l, s/u/d)" Size="Size.Small" Dense="true" />
+            <div class="gf-dialog-row">
+                <MudCheckBox T="bool" @bind-Value="_s.VimNavigation" Label="Single-key shortcuts, vim-style (j/k, g g, h/l, s/u/d…)" Size="Size.Small" Dense="true" />
+                <span class="gf-spacer"></span>
+                <button type="button" class="gf-link-button" @onclick="OpenShortcutsAsync">Customize keyboard shortcuts…</button>
+            </div>
             <MudCheckBox T="bool" @bind-Value="_s.SyntaxHighlighting" Label="Syntax highlighting in diffs and blame" Size="Size.Small" Dense="true" />
             <MudCheckBox T="bool" @bind-Value="_s.FetchOnOpen" Label="Fetch when a repository opens" Size="Size.Small" Dense="true" />
             <MudCheckBox T="bool" @bind-Value="_s.AutoUpdateSubmodules" Label="Update submodules automatically (recursive) after checkout, pull, merge, rebase, reset, and undo" Size="Size.Small" Dense="true" />
@@ -62,6 +67,12 @@
             AutoUpdateSubmodules = c.AutoUpdateSubmodules, SyntaxHighlighting = c.SyntaxHighlighting,
             AutoFetchMinutes = c.AutoFetchMinutes, GitExecutablePath = c.GitExecutablePath, ExternalMergeTool = c.ExternalMergeTool,
         };
+    }
+
+    private async Task OpenShortcutsAsync()
+    {
+        var dialog = await Dialogs.ShowAsync<ShortcutsDialog>("Keyboard shortcuts", new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true });
+        await dialog.Result;
     }
 
     private async Task Save()

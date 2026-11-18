@@ -7,7 +7,23 @@
 <MudMenuItem Icon="@Icons.Material.Outlined.CallSplit" OnClick="NewBranch">New branch here…</MudMenuItem>
 <MudMenuItem Icon="@Icons.Material.Outlined.LocalOffer" OnClick="NewTag">New tag here…</MudMenuItem>
 <MudDivider />
-<MudMenuItem Icon="@Icons.Material.Outlined.ContentPasteGo" OnClick="CherryPick">Cherry-pick onto @(W.CurrentBranch ?? "HEAD")</MudMenuItem>
+@if (InMultiSelection)
+{
+    <MudMenuItem Icon="@Icons.Material.Outlined.ContentPasteGo" OnClick="CherryPickSelection">Cherry-pick @W.MultiSelection.Count selected commits onto @(W.CurrentBranch ?? "HEAD")…</MudMenuItem>
+    @if (W.MultiSelection.Count == 2)
+    {
+        <MudMenuItem Icon="@Icons.Material.Outlined.CompareArrows" OnClick="CompareSelection">Compare the two selected commits</MudMenuItem>
+    }
+}
+else
+{
+    <MudMenuItem Icon="@Icons.Material.Outlined.ContentPasteGo" OnClick="CherryPick">Cherry-pick onto @(W.CurrentBranch ?? "HEAD")</MudMenuItem>
+}
+@if (CompareBase is { } other)
+{
+    <MudMenuItem Icon="@Icons.Material.Outlined.CompareArrows" OnClick="@(() => W.CompareCommits(other, Commit.Sha))">Compare with selected (@other[..7])</MudMenuItem>
+}
+<MudMenuItem Icon="@Icons.Material.Outlined.Difference" OnClick="@(() => W.ShowCompare(Commit.Sha, null))">Compare with working tree</MudMenuItem>
 <MudMenuItem Icon="@Icons.Material.Outlined.Undo" OnClick="Revert">Revert commit</MudMenuItem>
 <MudMenuItem Icon="@Icons.Material.Outlined.Reorder" OnClick="InteractiveRebase">Interactive rebase children…</MudMenuItem>
 <MudDivider />
@@ -41,6 +57,26 @@
 
     private Task CherryPick() => Run($"Cherry-picking {Commit.ShortSha}", r => r.History.CherryPickAsync([Commit.Sha]));
 
+    private bool InMultiSelection => W.MultiSelection.Count > 1 && W.MultiSelection.Contains(Commit.Sha);
+
+    /// <summary>The single selected commit this one can be compared with (none while several are selected).</summary>
+    private string? CompareBase => W.MultiSelection.Count == 0 && !W.WipSelected && W.SelectedCommitSha is { } s && s != Commit.Sha ? s : null;
+
+    private void CompareSelection()
+    {
+        if (W.SelectedCommitsOldestFirst() is [var a, var b]) W.CompareCommits(a.Sha, b.Sha);
+    }
+
+    private async Task CherryPickSelection()
+    {
+        var count = W.MultiSelection.Count;
+        var target = W.CurrentBranch ?? "HEAD";
+        if (await Dialogs.ShowMessageBoxAsync("Cherry-pick commits", $"Cherry-pick {count} commits onto {target}, oldest first? If one conflicts, GitForge stops so you can resolve it, then continue or abort.", yesText: "Cherry-pick", cancelText: "Cancel") == true)
+        {
+            await W.CherryPickSelectionAsync();
+        }
+    }
+
     private async Task Revert()
     {
         if (await Dialogs.ShowMessageBoxAsync("Revert commit", $"Create a new commit that reverts {Commit.ShortSha} \"{Commit.Subject}\"?", yesText: "Revert", cancelText: "Cancel") == true)
@@ -57,7 +93,7 @@
             return;
         }
 
-        await W.RunUndoableAsync($"Resetting to {Commit.ShortSha}", r => UndoableOperations.ResetAsync(r, Commit.Sha, mode), "Reset complete (Ctrl+Z to undo)");
+        await W.RunUndoableAsync($"Resetting to {Commit.ShortSha}", r => UndoableOperations.ResetAsync(r, Commit.Sha, mode), $"Reset complete ({Keymap.UndoName(W.Settings)} reverses it)");
     }
 
     private async Task InteractiveRebase()

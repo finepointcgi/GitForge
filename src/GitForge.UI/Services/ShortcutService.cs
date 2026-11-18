@@ -1,3 +1,4 @@
+using GitForge.Core.Abstractions;
 using Microsoft.JSInterop;
 
 namespace GitForge.UI.Services;
@@ -6,69 +7,77 @@ namespace GitForge.UI.Services;
 public sealed record KeyInput(string Key, bool Ctrl, bool Shift, bool Alt, bool Meta, bool InInput);
 
 /// <summary>
-/// Keyboard-first command routing. JS captures keys at the document level; this service maps them to
-/// command ids that any component can handle. Vim-style keys apply only outside text inputs.
+/// Keyboard-first command routing. gitforge.js captures only the chords bound here (it gets the list from
+/// <see cref="ApplyAsync"/>) and forwards them; this service maps each chord to a command id that any component can
+/// handle. Bindings come from <see cref="Keymap"/> plus the user's changes in settings.
 /// </summary>
 public sealed class ShortcutService : IAsyncDisposable
 {
-    public static readonly IReadOnlyList<(string Keys, string Command, string Description)> Map =
-    [
-        ("Ctrl+P", "palette.open", "Command palette (actions, branches, repositories)"),
-        ("Ctrl+Tab / Ctrl+PgDn", "tab.next", "Next repository tab"),
-        ("Ctrl+Shift+Tab / Ctrl+PgUp", "tab.prev", "Previous repository tab"),
-        ("Ctrl+T", "repo.open", "Open a repository in a new tab"),
-        ("Ctrl+W", "tab.close", "Close the current tab"),
-        ("Ctrl+Z", "edit.undo", "Undo last action (commit, checkout, branch, reset, discard)"),
-        ("Ctrl+Y / Ctrl+Shift+Z", "edit.redo", "Redo"),
-        ("Ctrl+1", "view.status", "Select WIP (staging)"),
-        ("Ctrl+2", "view.history", "Back to the commit graph"),
-        ("Ctrl+3", "view.reflog", "Reflog recovery"),
-        ("Ctrl+4", "view.changes", "Changes on the current branch (since it branched)"),
-        ("Ctrl+H", "graph.head", "Go to the current branch in the graph"),
-        ("Esc", "escape", "Close diff / reflog, return to graph"),
-        ("Ctrl+O", "repo.open", "Open repository"),
-        ("Ctrl+Shift+O", "repo.clone", "Clone repository"),
-        ("F5", "repo.refresh", "Refresh"),
-        ("Ctrl+Shift+F", "remote.fetch", "Fetch all remotes"),
-        ("Ctrl+Shift+L", "remote.pull", "Pull"),
-        ("Ctrl+Shift+P", "remote.push", "Push"),
-        ("Ctrl+B", "branch.new", "New branch"),
-        ("Ctrl+Shift+S", "stash.save", "Stash changes"),
-        ("Ctrl+`", "console.toggle", "Toggle git console"),
-        ("Ctrl+F", "search.focus", "Search / filter"),
-        ("/", "search.focus", "Search / filter (vim)"),
-        ("Ctrl+Enter", "commit.submit", "Commit staged changes"),
-        ("j / ↓", "nav.down", "Next item"),
-        ("k / ↑", "nav.up", "Previous item"),
-        ("g g", "nav.top", "First item"),
-        ("Shift+G", "nav.bottom", "Last item"),
-        ("h / l", "pane.prev / pane.next", "Move focus: graph ↔ commit panel"),
-        ("s", "item.stage", "Stage file / selected lines"),
-        ("u", "item.unstage", "Unstage file / selected lines"),
-        ("d", "item.discard", "Discard (asks to confirm)"),
-        ("Space", "item.toggle", "Toggle line selection in diff"),
-        ("m / t / b", "merge.mine / merge.theirs / merge.both", "Conflict editor: take mine / theirs / both"),
-        ("n / p", "merge.next / merge.prev", "Conflict editor: next / previous conflict"),
-        ("Ctrl+S", "merge.save", "Conflict editor: save and mark resolved"),
-        ("?", "help.shortcuts", "Show shortcuts"),
-    ];
+    private const int SequenceTimeoutMs = 600;
 
     private readonly IJSRuntime _js;
     private DotNetObjectReference<ShortcutService>? _ref;
-    private string? _pendingG;
+    private Dictionary<string, string> _single = new(StringComparer.Ordinal);    // chord → command
+    private Dictionary<string, string> _sequences = new(StringComparer.Ordinal); // "g g" → command
+    private HashSet<string> _prefixes = new(StringComparer.Ordinal);             // first chords of sequences
+    private List<JsBinding> _jsBindings = [];
+    private string? _pending;
     private DateTime _pendingAt;
 
-    public ShortcutService(IJSRuntime js) => _js = js;
+    public ShortcutService(IJSRuntime js)
+    {
+        _js = js;
+        Configure(new AppSettings());
+    }
+
+    /// <summary>A chord gitforge.js should capture; <see cref="InText"/> lets it fire while a text field has focus.</summary>
+    public sealed record JsBinding(string Chord, bool InText);
 
     public event Func<string, Task>? Command;
 
-    public bool VimNavigation { get; set; } = true;
+    /// <summary>Rebuilds the chord tables from <paramref name="settings"/>; single-key chords are dropped while vim-style navigation is off.</summary>
+    public void Configure(AppSettings settings)
+    {
+        var single = new Dictionary<string, string>(StringComparer.Ordinal);
+        var sequences = new Dictionary<string, string>(StringComparer.Ordinal);
+        var prefixes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var command in Keymap.Commands)
+        {
+            foreach (var chord in Keymap.Effective(settings, command.Id))
+            {
+                if (!settings.VimNavigation && Keymap.IsSingleKey(chord)) continue;
+                var space = chord.IndexOf(' ', StringComparison.Ordinal);
+                if (space < 0)
+                {
+                    single.TryAdd(chord, command.Id);
+                }
+                else if (sequences.TryAdd(chord, command.Id))
+                {
+                    prefixes.Add(chord[..space]);
+                }
+            }
+        }
+
+        _single = single;
+        _sequences = sequences;
+        _prefixes = prefixes;
+        _jsBindings = single.Select(kv => new JsBinding(kv.Key, Keymap.WorksInTextFields(kv.Key, kv.Value)))
+            .Concat(prefixes.Where(p => !single.ContainsKey(p)).Select(p => new JsBinding(p, false)))
+            .ToList();
+    }
+
+    /// <summary>Applies changed settings and tells gitforge.js which chords to capture.</summary>
+    public async Task ApplyAsync(AppSettings settings)
+    {
+        Configure(settings);
+        if (_ref is not null) await _js.InvokeVoidAsync("gitforge.setKeyBindings", _jsBindings);
+    }
 
     public async Task AttachAsync()
     {
         if (_ref is not null) return;
         _ref = DotNetObjectReference.Create(this);
-        await _js.InvokeVoidAsync("gitforge.registerShortcuts", _ref);
+        await _js.InvokeVoidAsync("gitforge.registerShortcuts", _ref, _jsBindings);
     }
 
     [JSInvokable]
@@ -93,86 +102,30 @@ public sealed class ShortcutService : IAsyncDisposable
 
     internal string? Resolve(KeyInput k)
     {
-        var key = k.Key;
-        if (k.Ctrl || k.Meta)
+        var chord = Keymap.FromInput(k);
+        if (chord is null) return null;
+
+        if (_pending is { } first)
         {
-            return (key.ToLowerInvariant(), k.Shift) switch
+            _pending = null;
+            if (!k.InInput && (DateTime.UtcNow - _pendingAt).TotalMilliseconds < SequenceTimeoutMs && _sequences.TryGetValue($"{first} {chord}", out var sequence))
             {
-                ("1", false) => "view.status",
-                ("2", false) => "view.history",
-                ("3", false) => "view.reflog",
-                ("4", false) => "view.changes",
-                ("h", false) => "graph.head",
-                ("o", false) => "repo.open",
-                ("o", true) => "repo.clone",
-                ("f", true) => "remote.fetch",
-                ("l", true) => "remote.pull",
-                ("p", true) => "remote.push",
-                ("b", false) => "branch.new",
-                ("s", true) => "stash.save",
-                ("`", _) => "console.toggle",
-                ("f", false) => "search.focus",
-                ("enter", _) => "commit.submit",
-                ("p", false) => "palette.open",
-                ("tab", false) or ("pagedown", _) => "tab.next",
-                ("tab", true) or ("pageup", _) => "tab.prev",
-                ("t", false) => "repo.open",
-                ("s", false) => "merge.save",
-                ("w", false) => "tab.close",
-                ("z", false) when !k.InInput => "edit.undo",
-                ("z", true) when !k.InInput => "edit.redo",
-                ("y", false) when !k.InInput => "edit.redo",
-                _ => null,
-            };
-        }
-
-        if (key == "F5") return "repo.refresh";
-        if (key == "Escape") return "escape";
-        if (k.InInput || k.Alt) return null;
-
-        switch (key)
-        {
-            case "ArrowDown": return "nav.down";
-            case "ArrowUp": return "nav.up";
-            case "Enter": return "nav.open";
-        }
-
-        if (!VimNavigation) return null;
-
-        if (key == "g")
-        {
-            if (_pendingG is not null && (DateTime.UtcNow - _pendingAt).TotalMilliseconds < 600)
-            {
-                _pendingG = null;
-                return "nav.top";
+                return sequence;
             }
-
-            _pendingG = "g";
-            _pendingAt = DateTime.UtcNow;
-            return null;
         }
 
-        _pendingG = null;
-        return key switch
+        if (_single.TryGetValue(chord, out var command))
         {
-            "j" => "nav.down",
-            "k" => "nav.up",
-            "G" => "nav.bottom",
-            "h" => "pane.prev",
-            "l" => "pane.next",
-            "s" => "item.stage",
-            "m" => "merge.mine",
-            "t" => "merge.theirs",
-            "b" => "merge.both",
-            "n" => "merge.next",
-            "p" => "merge.prev",
-            "u" => "item.unstage",
-            "d" => "item.discard",
-            " " => "item.toggle",
-            "/" => "search.focus",
-            "?" => "help.shortcuts",
-            _ => null,
-        };
+            return k.InInput && !Keymap.WorksInTextFields(chord, command) ? null : command;
+        }
+
+        if (!k.InInput && _prefixes.Contains(chord))
+        {
+            _pending = chord;
+            _pendingAt = DateTime.UtcNow;
+        }
+
+        return null;
     }
 
     public async ValueTask DisposeAsync()

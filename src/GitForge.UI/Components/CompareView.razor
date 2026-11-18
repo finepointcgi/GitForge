@@ -1,0 +1,182 @@
+@implements IDisposable
+@inject RepoWorkspace W
+
+@* Direct comparison of two revisions (git diff A B), or of one revision and the working tree. Lists the commits
+   reachable from the newer side only, then every file that differs. *@
+<div class="gf-fileview">
+    <div class="gf-diffpane-head gf-compare-head">
+        <button class="gf-back" @onclick="W.ShowGraph" title="Back to graph (Esc)"><MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Size="Size.Small" /> Graph</button>
+        <MudIcon Icon="@Icons.Material.Outlined.CompareArrows" Size="Size.Small" />
+        <span>Compare</span>
+        <span class="gf-chip gf-mono" title="@Describe(_from)">@Label(_from)</span>
+        <span class="gf-dim">→</span>
+        <span class="gf-chip gf-mono" title="@Describe(_to)">@Label(_to)</span>
+        @if (_to is not null)
+        {
+            <MudTooltip Text="Swap the two sides">
+                <button class="gf-icon-plain" aria-label="Swap the two sides" @onclick="SwapAsync"><MudIcon Icon="@Icons.Material.Outlined.SwapHoriz" Size="Size.Small" /></button>
+            </MudTooltip>
+        }
+        <span class="gf-spacer"></span>
+        @if (!_loading && _error is null)
+        {
+            <span class="gf-chip">@_commits.Count commit@(_commits.Count == 1 ? string.Empty : "s") · @_files.Count file@(_files.Count == 1 ? string.Empty : "s")</span>
+        }
+        <MudTooltip Text="Reload the comparison">
+            <button class="gf-icon-plain" aria-label="Reload the comparison" @onclick="LoadAsync"><MudIcon Icon="@Icons.Material.Outlined.Refresh" Size="Size.Small" /></button>
+        </MudTooltip>
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+    }
+    else if (_error is not null)
+    {
+        <div class="gf-empty">@_error</div>
+    }
+    else
+    {
+        <div class="gf-split-x gf-grow-pane" id="gf-compareview">
+            <div class="gf-pane">
+                <div class="gf-scroll">
+                    <div class="gf-group-head" title="Commits in @Newer that are not in @Label(_from)">
+                        <span class="gf-group-title">Commits only in @Newer</span><span class="gf-count">@_commits.Count</span>
+                    </div>
+                    @foreach (var c in _commits.Take(500))
+                    {
+                        <div class="gf-history-row @(c.Sha == W.SelectedCommitSha ? "selected" : null)" title="Show this commit's details in the right panel" @onclick="@(() => W.SelectCommit(c.Sha))">
+                            <Avatar Name="@c.AuthorName" Email="@c.AuthorEmail" Small="true" />
+                            <div class="gf-grow">
+                                <div class="gf-ellipsis">@c.Subject</div>
+                                <div class="gf-dim gf-small gf-ellipsis">@c.AuthorName · @Avatars.When(c.AuthorDate) · <span class="gf-mono">@c.ShortSha</span></div>
+                            </div>
+                        </div>
+                    }
+                    @if (_commits.Count == 0)
+                    {
+                        <div class="gf-empty gf-small">@(_behind > 0 ? $"None. {Label(_to)} is {_behind} commit{(_behind == 1 ? string.Empty : "s")} behind {Label(_from)}; swap the sides to list them." : "None.")</div>
+                    }
+                    <div class="gf-group-head"><span class="gf-group-title">Files</span><span class="gf-count">@_files.Count</span></div>
+                    @foreach (var f in _files.Take(2000))
+                    {
+                        <FileChangeRow Change="f" Selected="@(f == _file)" OnClick="@(() => SelectFileAsync(f))" />
+                    }
+                    @if (_files.Count == 0)
+                    {
+                        <div class="gf-empty gf-small">The two sides have identical files.</div>
+                    }
+                </div>
+            </div>
+            <div class="gf-splitter gf-splitter-x" data-var="--gf-files-w" data-target="gf-compareview" data-min="240" data-max="900"></div>
+            <div class="gf-pane">
+                <DiffViewer Diff="_diff" Loading="_diffLoading" Title="@_file?.Path" Placeholder="Select a file to see how it differs" />
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private string _from = string.Empty;
+    private string? _to;
+    private readonly List<CommitInfo> _commits = [];
+    private int _behind;
+    private IReadOnlyList<FileChange> _files = [];
+    private FileChange? _file;
+    private FileDiff? _diff;
+    private bool _loading, _diffLoading;
+    private string? _error;
+    private CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (W.CommitCompare is not { } target) return;
+        (_from, _to) = (target.From, target.To);
+        await LoadAsync();
+    }
+
+    private string Newer => _to is null ? "HEAD" : Label(_to);
+
+    private string Label(string? rev) => rev is null ? "working tree" : rev.Length >= 40 ? rev[..7] : rev;
+
+    private string Describe(string? rev) => rev is null
+        ? "Your working tree: staged and unstaged changes to tracked files"
+        : W.FindCommit(rev) is { } c ? $"{c.ShortSha} {c.Subject}\n{c.AuthorName} · {c.AuthorDate.LocalDateTime.ToString("g", CultureInfo.CurrentCulture)}" : rev;
+
+    private async Task SwapAsync()
+    {
+        if (_to is null) return;
+        (_from, _to) = (_to, _from);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _cts.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+        _commits.Clear();
+        _behind = 0;
+        _files = [];
+        _file = null;
+        _diff = null;
+        _error = null;
+        if (W.Repo is not { } repo || _from.Length == 0) return;
+
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var (from, to) = (_from, _to);
+            var newer = to ?? "HEAD";
+            await foreach (var c in repo.Read.GetHistoryAsync(new HistoryQuery { StartRef = $"{from}..{newer}", MaxCount = 5000 }, ct)) _commits.Add(c);
+            if (_commits.Count == 0 && to is not null)
+            {
+                await foreach (var _ in repo.Read.GetHistoryAsync(new HistoryQuery { StartRef = $"{to}..{from}", MaxCount = 5000 }, ct)) _behind++;
+            }
+
+            _files = await Task.Run(() => repo.Read.GetChangesBetweenAsync(from, to, ct), ct);
+            if (_files.Count > 0) await SelectFileAsync(_files[0]);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not compare: " + (ex is GitCommandException g ? g.GitMessage : ex.Message);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SelectFileAsync(FileChange f)
+    {
+        if (W.Repo is not { } repo) return;
+        _file = f;
+        _diffLoading = true;
+        StateHasChanged();
+        try
+        {
+            var (from, to) = (_from, _to);
+            var options = new DiffOptions(W.Settings.IgnoreWhitespace);
+            var diff = await Task.Run(() => repo.Read.GetDiffBetweenAsync(from, to, f, options));
+            if (_file == f) _diff = diff;
+        }
+        catch (Exception ex)
+        {
+            W.Error("Load diff", ex);
+        }
+        finally
+        {
+            _diffLoading = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

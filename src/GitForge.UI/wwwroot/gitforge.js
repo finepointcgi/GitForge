@@ -2,9 +2,32 @@
 (function () {
   "use strict";
 
-  const ctrlKeys = new Set(["1", "2", "3", "4", "h", "o", "f", "l", "p", "b", "s", "`", "enter", "tab", "pagedown", "pageup", "t", "w"]);
-  const plainKeys = new Set(["ArrowDown", "ArrowUp", "Enter", "j", "k", "g", "G", "h", "l", "s", "u", "d", " ", "/", "?", "m", "t", "b", "n", "p"]);
+  // Key chords in the canonical form Keymap.cs uses: "ctrl+alt+shift+key", lower case. Shift counts only for letters
+  // and named keys ("?" already means Shift+/). The .NET side sends the chords to capture, so only bound keys are taken.
+  const namedKeys = new Set(["enter", "escape", "tab", "backspace", "delete", "insert", "home", "end", "pageup", "pagedown",
+    "arrowup", "arrowdown", "arrowleft", "arrowright", "contextmenu"]);
+  let bindings = new Map(); // chord -> fires inside text fields
   let keyHandler = null;
+
+  function chordOf(e) {
+    const key = e.key;
+    if (!key) return null;
+    let name;
+    if (key.length === 1) {
+      if (key.charCodeAt(0) < 32) return null;
+      name = key === " " ? "space" : key.toLowerCase();
+    } else {
+      name = key.toLowerCase();
+      if (!namedKeys.has(name) && !/^f([1-9]|1[0-9]|2[0-4])$/.test(name)) return null; // Shift, Control, Dead, ...
+    }
+    const letter = key.length === 1 && key.toLowerCase() !== key.toUpperCase();
+    const shift = e.shiftKey && (letter || key.length > 1);
+    return (e.ctrlKey || e.metaKey ? "ctrl+" : "") + (e.altKey ? "alt+" : "") + (shift ? "shift+" : "") + name;
+  }
+
+  function setKeyBindings(list) {
+    bindings = new Map((list || []).map(function (b) { return [b.chord, !!b.inText]; }));
+  }
 
   function isTextTarget(el) {
     if (!el) return false;
@@ -16,28 +39,22 @@
     return document.querySelector(".mud-dialog-container") !== null;
   }
 
-  function registerShortcuts(dotnetRef) {
+  function registerShortcuts(dotnetRef, list) {
     unregisterShortcuts();
+    setKeyBindings(list);
     keyHandler = function (e) {
-      const ctrl = e.ctrlKey || e.metaKey;
+      const chord = chordOf(e);
+      if (!chord) return;
+      if (chord === "f5") e.preventDefault(); // never reload the app, bound or not
+      if (!bindings.has(chord) || dialogOpen()) return;
       const inInput = isTextTarget(e.target);
-      const key = e.key;
-      let handled = false;
-
-      if (ctrl && (key.toLowerCase() === "z" || key.toLowerCase() === "y")) handled = !inInput && !dialogOpen(); // keep native text undo
-      else if (ctrl && ctrlKeys.has(key.toLowerCase())) handled = !dialogOpen();
-      else if (key === "F5") handled = true;
-      else if (key === "Escape") handled = !dialogOpen();
-      else if (!ctrl && !e.altKey && !inInput && !dialogOpen() && plainKeys.has(key)) {
-        // Let focused buttons and links keep native Space/Enter activation.
-        const tag = e.target && e.target.tagName;
-        handled = !((key === " " || key === "Enter") && (tag === "BUTTON" || tag === "A"));
-      }
-
-      if (!handled) return;
-      if (key !== "Escape") e.preventDefault();
+      if (inInput && !bindings.get(chord)) return; // typing wins (and Ctrl+Z stays native text undo)
+      // Let focused buttons and links keep native Space/Enter activation.
+      const tag = e.target && e.target.tagName;
+      if ((chord === "space" || chord === "enter") && (tag === "BUTTON" || tag === "A")) return;
+      if (chord !== "escape") e.preventDefault();
       dotnetRef.invokeMethodAsync("OnKey", {
-        key: key, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, meta: e.metaKey, inInput: inInput
+        key: e.key, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, meta: e.metaKey, inInput: inInput
       }).catch(function () { /* circuit gone */ });
     };
     document.addEventListener("keydown", keyHandler, true);
@@ -187,5 +204,5 @@
     ta.remove();
   }
 
-  window.gitforge = { registerShortcuts, unregisterShortcuts, scrollRowIntoView, scrollIntoViewById, scrollToBottom, copyText, resetColumns };
+  window.gitforge = { registerShortcuts, unregisterShortcuts, setKeyBindings, scrollRowIntoView, scrollIntoViewById, scrollToBottom, copyText, resetColumns };
 })();

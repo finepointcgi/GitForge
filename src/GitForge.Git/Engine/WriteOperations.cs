@@ -58,16 +58,29 @@ internal sealed class IndexOperations(RepoContext ctx) : IIndexOperations
 
     public async Task ApplySelectionAsync(FileDiff diff, IReadOnlySet<LineRef> selection, PatchAction action, CancellationToken cancellationToken = default)
     {
+        // Unstaging every line of a newly added file means "not added": remove the entry instead of staging an empty file.
+        if (diff.IsNewFile && action == PatchAction.Unstage && PatchBuilder.SelectsAllChanges(diff, selection))
+        {
+            await UnstageAsync([diff.Path], cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var patch = PatchBuilder.Build(diff, selection, action);
         if (patch is null) return;
+        await ctx.WriteAsync($"{action.ToString().ToLowerInvariant()} selection", ApplyArguments(diff, action), cancellationToken, patch).ConfigureAwait(false);
+    }
 
+    /// <summary><c>git apply</c> arguments for a patch built from <paramref name="diff"/>; the patch is read from standard input.</summary>
+    internal static List<string> ApplyArguments(FileDiff diff, PatchAction action, bool checkOnly = false)
+    {
         var args = new List<string> { "apply", "--whitespace=nowarn" };
+        if (checkOnly) args.Add("--check");
         // git apply refuses context-free hunks (diffs produced with -U0) unless told to accept them.
         if (diff.Hunks.Any(h => h.Lines.All(l => l.IsChange))) args.Add("--unidiff-zero");
         if (action != PatchAction.Discard) args.Add("--cached");
         if (PatchBuilder.IsReverse(action)) args.Add("--reverse");
         args.Add("-");
-        await ctx.WriteAsync($"{action.ToString().ToLowerInvariant()} selection", args, cancellationToken, patch).ConfigureAwait(false);
+        return args;
     }
 
     public async Task<string> CommitAsync(CommitRequest request, CancellationToken cancellationToken = default)
@@ -309,6 +322,21 @@ internal sealed class StashOperations(RepoContext ctx, IRepositoryReader reader)
             throw new InvalidOperationException("Resolve existing conflicts before applying a stash.");
         }
 
+        // git stash apply refuses any file with uncommitted edits, even when the edits don't overlap: the usual state
+        // after stashing some lines of a file and keeping the rest. Such stashes go in as one patch, all hunks or none.
+        if (!restoreIndex && !status.IsClean)
+        {
+            var contents = await GetContentsAsync($"stash@{{{index}}}", cancellationToken).ConfigureAwait(false);
+            var dirty = status.Staged.Concat(status.Unstaged).SelectMany(Paths).ToHashSet(StringComparer.Ordinal);
+            var overlap = contents.Files.Where(f => !f.Untracked).SelectMany(f => Paths(f.Change)).Where(dirty.Contains).Distinct().ToList();
+            if (overlap.Count > 0 && contents.UntrackedSha is null)
+            {
+                await ApplyAsPatchAsync(contents, overlap, cancellationToken).ConfigureAwait(false);
+                if (pop) await DropAsync(index, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+        }
+
         var args = new List<string> { "stash", pop ? "pop" : "apply" };
         if (restoreIndex) args.Add("--index");
         args.Add($"stash@{{{index}}}");
@@ -318,10 +346,121 @@ internal sealed class StashOperations(RepoContext ctx, IRepositoryReader reader)
     public Task DropAsync(int index, CancellationToken cancellationToken = default) =>
         ctx.WriteAsync("stash drop", ["stash", "drop", $"stash@{{{index}}}"], cancellationToken);
 
+    private static IEnumerable<string> Paths(FileStatusEntry f) => f.OldPath is null ? [f.Path] : [f.Path, f.OldPath];
+
+    private static IEnumerable<string> Paths(FileChange c) => c.OldPath is null ? [c.Path] : [c.Path, c.OldPath];
+
+    /// <summary>Applies the stash's changes to the working tree with <c>git apply</c>, which is atomic: on failure nothing changes.</summary>
+    private async Task ApplyAsPatchAsync(StashContents stash, List<string> overlap, CancellationToken ct)
+    {
+        var diff = await ctx.RunAsync(["diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", stash.BaseSha, stash.Sha, "--"], ct).ConfigureAwait(false);
+        var patch = diff.EnsureSuccess("stash apply").StandardOutput;
+        if (patch.Length == 0) return;
+
+        var result = await ctx.TryWriteAsync(["apply", "--whitespace=nowarn", "-"], ct, patch).ConfigureAwait(false);
+        if (!result.Succeeded)
+        {
+            var files = string.Join(", ", overlap.Take(3)) + (overlap.Count > 3 ? $", and {overlap.Count - 3} more" : string.Empty);
+            throw new InvalidOperationException($"The stash changes the same lines as your uncommitted edits in {files}. Commit or stash those edits, then try again. Nothing was changed.");
+        }
+    }
+
     public async Task<IReadOnlyList<FileChange>> GetChangesAsync(int index, CancellationToken cancellationToken = default)
     {
         var r = await ctx.RunAsync(["stash", "show", "--name-status", "-M", "--include-untracked", $"stash@{{{index}}}"], cancellationToken).ConfigureAwait(false);
         return ParseNameStatus(r.EnsureSuccess("stash show").StandardOutput);
+    }
+
+    /// <summary>
+    /// A stash commit's parents are the commit it was made on, the saved index, and (with untracked files) a root
+    /// commit holding only the untracked files.
+    /// </summary>
+    public async Task<StashContents> GetContentsAsync(string stashSha, CancellationToken cancellationToken = default)
+    {
+        var r = await ctx.RunAsync(["rev-list", "--parents", "-n", "1", BranchOperations.Guard(stashSha), "--"], cancellationToken).ConfigureAwait(false);
+        var shas = r.EnsureSuccess("rev-list").StandardOutput.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (shas.Length < 3) throw new InvalidOperationException($"{stashSha} is not a stash.");
+
+        var files = (await reader.GetChangesBetweenAsync(shas[1], shas[0], cancellationToken).ConfigureAwait(false))
+            .Select(c => new StashFile(c, Untracked: false))
+            .ToList();
+        var untrackedSha = shas.Length > 3 ? shas[3] : null;
+        if (untrackedSha is not null)
+        {
+            var tree = await ctx.RunAsync(["ls-tree", "-r", "--name-only", "-z", untrackedSha], cancellationToken).ConfigureAwait(false);
+            files.AddRange(tree.EnsureSuccess("ls-tree").StandardOutput
+                .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .Select(p => new StashFile(new FileChange(p, null, FileChangeKind.Added), Untracked: true)));
+        }
+
+        return new StashContents(shas[0], shas[1], untrackedSha, files);
+    }
+
+    public Task<FileDiff?> GetDiffAsync(StashContents stash, StashFile file, DiffOptions options, CancellationToken cancellationToken = default) =>
+        file.Untracked && stash.UntrackedSha is { } untracked
+            ? reader.GetCommitDiffAsync(untracked, file.Change, options, cancellationToken) // root commit: every file shows as added
+            : reader.GetDiffBetweenAsync(stash.BaseSha, stash.Sha, file.Change, options, cancellationToken);
+
+    /// <summary>
+    /// Builds the stash the way <c>git stash push --patch</c> does: a temporary index starts at HEAD and receives the
+    /// selected lines (the stash's working tree); the real index becomes the stash's index commit. The stash is stored
+    /// only after a dry run proves the lines can be removed from the working tree, and is never signed (as with git stash).
+    /// </summary>
+    public async Task SaveSelectionAsync(FileDiff diff, IReadOnlySet<LineRef> selection, string? message, CancellationToken cancellationToken = default)
+    {
+        var ct = cancellationToken;
+        if (diff.IsNewFile) throw new InvalidOperationException($"'{diff.Path}' is a new file. Stash it as a whole with \"Include untracked files\".");
+        var stage = PatchBuilder.Build(diff, selection, PatchAction.Stage) ?? throw new InvalidOperationException("Select at least one changed line to stash.");
+        var discard = PatchBuilder.Build(diff, selection, PatchAction.Discard)!;
+
+        var head = (await ctx.RunAsync(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], ct, okCodes: [0, 1, 128]).ConfigureAwait(false)).StandardOutput.Trim();
+        if (head.Length < 40) throw new InvalidOperationException("Commit at least once before stashing.");
+
+        var staged = await ctx.RunAsync(["--literal-pathspecs", "diff", "--cached", "--quiet", "--", diff.Path], ct, okCodes: [0, 1]).ConfigureAwait(false);
+        if (staged.ExitCode == 1) throw new InvalidOperationException($"'{diff.Path}' has staged changes. Commit or unstage them before stashing lines.");
+
+        (await ctx.RunAsync(IndexOperations.ApplyArguments(diff, PatchAction.Discard, checkOnly: true), ct, discard).ConfigureAwait(false)).EnsureSuccess("stash lines");
+
+        var temp = Directory.CreateTempSubdirectory("gitforge-stash-");
+        try
+        {
+            var tempIndex = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = Path.Combine(temp.FullName, "index") };
+            (await ctx.RunAsync(["read-tree", head], ct, env: tempIndex).ConfigureAwait(false)).EnsureSuccess("read-tree");
+            (await ctx.RunAsync(IndexOperations.ApplyArguments(diff, PatchAction.Stage), ct, stage, env: tempIndex).ConfigureAwait(false)).EnsureSuccess("stash lines");
+            var workTree = (await ctx.RunAsync(["write-tree"], ct, env: tempIndex).ConfigureAwait(false)).EnsureSuccess("write-tree").StandardOutput.Trim();
+            var indexTree = (await ctx.RunAsync(["write-tree"], ct).ConfigureAwait(false)).EnsureSuccess("write-tree").StandardOutput.Trim();
+
+            // Same messages as git stash: "WIP on <branch>: <sha> <subject>" or "On <branch>: <message>".
+            var branch = (await ctx.RunAsync(["symbolic-ref", "--quiet", "--short", "HEAD"], ct, okCodes: [0, 1]).ConfigureAwait(false)).StandardOutput.Trim();
+            if (branch.Length == 0) branch = "(no branch)";
+            var subject = (await ctx.RunAsync(["log", "-1", "--format=%h %s", head, "--"], ct).ConfigureAwait(false)).EnsureSuccess("log").StandardOutput.Trim();
+            var title = string.IsNullOrWhiteSpace(message) ? $"WIP on {branch}: {subject}" : $"On {branch}: {message.Trim()}";
+
+            var indexCommit = await CommitTreeAsync(indexTree, [head], $"index on {branch}: {subject}", ct).ConfigureAwait(false);
+            var stashCommit = await CommitTreeAsync(workTree, [head, indexCommit], title, ct).ConfigureAwait(false);
+            (await ctx.RunAsync(["stash", "store", "-m", title, stashCommit], ct).ConfigureAwait(false)).EnsureSuccess("stash store");
+        }
+        finally
+        {
+            try
+            {
+                temp.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        await ctx.WriteAsync("stash lines", IndexOperations.ApplyArguments(diff, PatchAction.Discard), ct, discard).ConfigureAwait(false);
+    }
+
+    private async Task<string> CommitTreeAsync(string tree, IReadOnlyList<string> parents, string message, CancellationToken ct)
+    {
+        var args = new List<string> { "commit-tree", "--no-gpg-sign", "-F", "-" };
+        foreach (var p in parents) args.AddRange(["-p", p]);
+        args.Add(tree);
+        return (await ctx.RunAsync(args, ct, message).ConfigureAwait(false)).EnsureSuccess("commit-tree").StandardOutput.Trim();
     }
 
     internal static IReadOnlyList<FileChange> ParseNameStatus(string output)
@@ -361,8 +500,25 @@ internal sealed class HistoryOperations(RepoContext ctx) : IHistoryOperations
     public Task RebaseOntoAsync(string upstream, CancellationToken cancellationToken = default) =>
         ctx.WriteAsync("rebase", ["rebase", BranchOperations.Guard(upstream)], cancellationToken, env: NoEditor);
 
-    public Task CherryPickAsync(IReadOnlyList<string> shas, CancellationToken cancellationToken = default) =>
-        ctx.WriteAsync("cherry-pick", ["cherry-pick", .. shas.Select(BranchOperations.Guard)], cancellationToken, env: NoEditor);
+    public async Task CherryPickAsync(IReadOnlyList<string> shas, CancellationToken cancellationToken = default)
+    {
+        var before = await HeadAsync(cancellationToken).ConfigureAwait(false);
+        var result = await ctx.TryWriteAsync(["cherry-pick", .. shas.Select(BranchOperations.Guard)], cancellationToken, env: NoEditor).ConfigureAwait(false);
+        if (result.Succeeded) return;
+
+        // Refused before the first commit was picked (local changes in the way): git still leaves the sequence
+        // "in progress". Clear it so a refusal changes nothing; a stop after some picks stays for continue or abort.
+        if (shas.Count > 1 && Directory.Exists(Path.Combine(ctx.GitDir, "sequencer")) && !File.Exists(Path.Combine(ctx.GitDir, "CHERRY_PICK_HEAD"))
+            && await HeadAsync(cancellationToken).ConfigureAwait(false) == before)
+        {
+            await ctx.TryWriteAsync(["cherry-pick", "--quit"], cancellationToken).ConfigureAwait(false);
+        }
+
+        result.EnsureSuccess("cherry-pick");
+    }
+
+    private async Task<string> HeadAsync(CancellationToken ct) =>
+        (await ctx.RunAsync(["rev-parse", "--verify", "--quiet", "HEAD"], ct, okCodes: [0, 1]).ConfigureAwait(false)).StandardOutput.Trim();
 
     public async Task RevertAsync(string sha, CancellationToken cancellationToken = default)
     {
@@ -424,7 +580,7 @@ internal sealed class HistoryOperations(RepoContext ctx) : IHistoryOperations
 
     private async Task<GitResult> SequencerAsync(string verb, CancellationToken ct)
     {
-        var op = await ctx.Lib.RunAsync(r => RepositoryReader.MapOperation(r.Info.CurrentOperation), ct).ConfigureAwait(false);
+        var op = await ctx.Lib.RunAsync(RepositoryReader.DetectOperation, ct).ConfigureAwait(false);
         var command = op switch
         {
             RepositoryOperation.Merge => "merge",

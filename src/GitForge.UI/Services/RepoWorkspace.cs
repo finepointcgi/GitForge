@@ -19,6 +19,8 @@ public enum CenterView
     FileHistory,
     Blame,
     BranchChanges,
+    Stash,
+    Compare,
 }
 
 public enum PullMode
@@ -40,6 +42,9 @@ public sealed record FileViewTarget(string Path, string? Revision = null);
 
 /// <summary>Compare a branch with the branch it came from: <see cref="Head"/> is "HEAD" or a branch name; a null base picks a sensible default.</summary>
 public sealed record BranchCompareTarget(string Head, string? Base, bool IncludeWorkingTree);
+
+/// <summary>Direct comparison of two revisions (<c>git diff From To</c>); a null <see cref="To"/> means the working tree.</summary>
+public sealed record CommitCompareTarget(string From, string? To);
 
 /// <summary>
 /// Per-window state: the open repository tabs and the active one. Components bind to the active session through
@@ -216,16 +221,157 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         if (_active is not { } s) return;
         s.WipSelected = true;
         s.SelectedCommitSha = null;
+        s.MultiSelection.Clear();
         Notify();
     }
 
+    /// <summary>Selects one commit (a plain click): any multi-selection is cleared.</summary>
     public void SelectCommit(string sha, bool reveal = false)
     {
         if (_active is not { } s) return;
         s.WipSelected = false;
         s.SelectedCommitSha = sha;
+        s.MultiSelection.Clear();
         Notify();
         if (reveal) RevealRequested?.Invoke(sha);
+    }
+
+    // ---------- Multi-selection (Ctrl+click, Shift+click) ----------
+
+    /// <summary>Commits picked together in the graph; empty unless two or more are selected.</summary>
+    public IReadOnlyCollection<string> MultiSelection => (IReadOnlyCollection<string>?)_active?.MultiSelection ?? [];
+
+    public bool IsCommitSelected(string sha) => _active is { WipSelected: false } s && (s.SelectedCommitSha == sha || s.MultiSelection.Contains(sha));
+
+    /// <summary>Ctrl+click: adds or removes one commit. Dropping back to a single commit leaves a normal selection.</summary>
+    public void ToggleCommitSelection(string sha)
+    {
+        if (_active is not { } s) return;
+        if (s.MultiSelection.Count == 0 && !s.WipSelected && s.SelectedCommitSha is { } current) s.MultiSelection.Add(current);
+        s.WipSelected = false;
+        if (s.MultiSelection.Remove(sha))
+        {
+            if (s.SelectedCommitSha == sha) s.SelectedCommitSha = s.MultiSelection.FirstOrDefault();
+        }
+        else
+        {
+            s.MultiSelection.Add(sha);
+            s.SelectedCommitSha = sha;
+        }
+
+        if (s.MultiSelection.Count < 2) s.MultiSelection.Clear();
+        Notify();
+    }
+
+    /// <summary>Shift+click: selects <paramref name="shas"/> (a range of graph rows); <paramref name="focus"/> becomes the current commit.</summary>
+    public void SelectCommitRange(IEnumerable<string> shas, string focus)
+    {
+        if (_active is not { } s) return;
+        s.MultiSelection.Clear();
+        s.MultiSelection.UnionWith(shas);
+        s.WipSelected = false;
+        s.SelectedCommitSha = focus;
+        if (s.MultiSelection.Count < 2) s.MultiSelection.Clear();
+        Notify();
+    }
+
+    public void ClearMultiSelection()
+    {
+        if (_active is not { MultiSelection.Count: > 0 } s) return;
+        s.MultiSelection.Clear();
+        Notify();
+    }
+
+    /// <summary>Row of a commit in the loaded graph (0 = newest), or -1 when it is not loaded.</summary>
+    public int RowIndexOf(string sha)
+    {
+        var rows = Rows;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (rows[i].Commit.Sha == sha) return i;
+        }
+
+        return -1;
+    }
+
+    public CommitInfo? FindCommit(string sha) => RowIndexOf(sha) is >= 0 and var i ? Rows[i].Commit : null;
+
+    /// <summary>
+    /// The multi-selected commits that are loaded in the graph, oldest first: the order a cherry-pick applies them.
+    /// The graph lists commits in date order with every parent below its children, so a lower row is never a descendant.
+    /// </summary>
+    public IReadOnlyList<CommitInfo> SelectedCommitsOldestFirst()
+    {
+        if (_active is not { MultiSelection.Count: > 1 } s) return [];
+        var rows = Rows;
+        var found = new List<(int Row, CommitInfo Commit)>(s.MultiSelection.Count);
+        for (var i = 0; i < rows.Count && found.Count < s.MultiSelection.Count; i++)
+        {
+            if (s.MultiSelection.Contains(rows[i].Commit.Sha)) found.Add((i, rows[i].Commit));
+        }
+
+        return found.OrderByDescending(f => f.Row).Select(f => f.Commit).ToList();
+    }
+
+    /// <summary>Compares two commits, older one first (by graph position) so the diff reads forward in time.</summary>
+    public void CompareCommits(string a, string b)
+    {
+        var (ia, ib) = (RowIndexOf(a), RowIndexOf(b));
+        if (ia >= 0 && ib >= 0 && ia < ib) (a, b) = (b, a);
+        ShowCompare(a, b);
+    }
+
+    // ---------- Branch drag and drop ----------
+
+    /// <summary>The branch being dragged (sidebar row or graph label), or null.</summary>
+    public BranchHead? DraggedBranch { get; private set; }
+
+    public void BeginBranchDrag(BranchHead branch)
+    {
+        DraggedBranch = branch;
+        Notify();
+    }
+
+    public void EndBranchDrag()
+    {
+        if (DraggedBranch is null) return;
+        DraggedBranch = null;
+        Notify();
+    }
+
+    /// <summary>Merges <paramref name="source"/> into the local branch <paramref name="target"/>, checking it out first when needed.</summary>
+    public Task MergeIntoAsync(string source, BranchHead target) =>
+        RunAsync($"Merging {source} into {target.Name}", async (r, _) =>
+        {
+            if (!target.IsCurrent) await r.Branches.CheckoutAsync(target.Name);
+            await r.History.MergeAsync(source, noFastForward: false);
+        }, $"Merged {source} into {target.Name}");
+
+    /// <summary>Rebases the local branch <paramref name="source"/> onto <paramref name="onto"/>, checking it out first when needed.</summary>
+    public Task RebaseBranchAsync(BranchHead source, string onto) =>
+        RunAsync($"Rebasing {source.Name} onto {onto}", async (r, _) =>
+        {
+            if (!source.IsCurrent) await r.Branches.CheckoutAsync(source.Name);
+            await r.History.RebaseOntoAsync(onto);
+        }, $"Rebased {source.Name} onto {onto}");
+
+    /// <summary>Cherry-picks the multi-selected commits onto HEAD, oldest first. Merge commits are refused.</summary>
+    public async Task CherryPickSelectionAsync()
+    {
+        var commits = SelectedCommitsOldestFirst();
+        if (commits.Count == 0) return;
+        if (commits.FirstOrDefault(c => c.IsMerge) is { } merge)
+        {
+            Info($"{merge.ShortSha} is a merge commit and can't be cherry-picked with others. Deselect it (Ctrl+click) and try again.", Severity.Warning);
+            return;
+        }
+
+        var shas = commits.Select(c => c.Sha).ToList();
+        var target = CurrentBranch ?? "HEAD";
+        if (await RunAsync($"Cherry-picking {shas.Count} commits onto {target}", (r, _) => r.History.CherryPickAsync(shas), $"Cherry-picked {shas.Count} commits onto {target}"))
+        {
+            ClearMultiSelection();
+        }
     }
 
     public void ShowGraph()
@@ -257,6 +403,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         if (_active is not { } s) return;
         s.Center = CenterView.Graph;
         s.OpenDiff = null;
+        s.MultiSelection.Clear();
         if (s.Snapshot?.HeadSha is { } head)
         {
             s.WipSelected = false;
@@ -270,6 +417,22 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
         Notify();
         RevealRequested?.Invoke(s.SelectedCommitSha ?? string.Empty);
+    }
+
+    /// <summary>Back to the graph with the WIP row selected (nothing changes when there is no uncommitted work).</summary>
+    public void GoToWip()
+    {
+        if (_active is not { } s) return;
+        s.Center = CenterView.Graph;
+        s.OpenDiff = null;
+        if (HasWip)
+        {
+            s.MultiSelection.Clear();
+            s.WipSelected = true;
+            s.SelectedCommitSha = null;
+        }
+
+        Notify();
     }
 
     /// <summary>Shows everything a branch changes since it diverged from its base (default: the current branch, including uncommitted work).</summary>
@@ -315,6 +478,28 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
             if (failed.Count > 0) _snackbar.Add($"Could not delete {string.Join(", ", failed)}", Severity.Error, o => o.VisibleStateDuration = 12000);
         });
+
+    /// <summary>The stash shown in the center pane, tracked by commit SHA because stash indexes shift as stashes come and go.</summary>
+    public string? OpenStashSha => _active?.OpenStashSha;
+
+    public void ShowStash(StashInfo stash)
+    {
+        if (_active is not { } s) return;
+        s.OpenStashSha = stash.Sha;
+        s.Center = CenterView.Stash;
+        Notify();
+    }
+
+    public CommitCompareTarget? CommitCompare => _active?.CommitCompare;
+
+    /// <summary>Shows every file that differs between two revisions (<paramref name="to"/> null = the working tree).</summary>
+    public void ShowCompare(string from, string? to)
+    {
+        if (_active is not { } s) return;
+        s.CommitCompare = new CommitCompareTarget(from, to);
+        s.Center = CenterView.Compare;
+        Notify();
+    }
 
     public void ShowFileHistory(string path) => ShowFileView(CenterView.FileHistory, new FileViewTarget(path));
 

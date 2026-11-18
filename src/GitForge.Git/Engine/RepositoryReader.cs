@@ -77,7 +77,7 @@ internal sealed class RepositoryReader(RepoContext ctx) : IRepositoryReader
                 headSha,
                 detached,
                 info.IsBare,
-                MapOperation(info.CurrentOperation),
+                DetectOperation(repo),
                 local.OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase).ToList(),
                 remote.OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase).ToList(),
                 tags.OrderByDescending(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList(),
@@ -442,6 +442,21 @@ internal sealed class RepositoryReader(RepoContext ctx) : IRepositoryReader
         ChangeKind.Ignored => FileChangeKind.Ignored,
         _ => FileChangeKind.Unmodified,
     };
+
+    /// <summary>
+    /// The operation in progress. A multi-commit cherry-pick or revert that stopped without a conflict (for example,
+    /// refused because local changes were in the way) leaves only .git/sequencer behind, which libgit2 does not report;
+    /// git still treats it as in progress and refuses new ones, so it is surfaced too (continue or abort clears it).
+    /// </summary>
+    internal static RepositoryOperation DetectOperation(Repository repo)
+    {
+        var op = MapOperation(repo.Info.CurrentOperation);
+        if (op != RepositoryOperation.None) return op;
+        var todo = Path.Combine(repo.Info.Path, "sequencer", "todo");
+        if (!File.Exists(todo)) return RepositoryOperation.None;
+        var next = File.ReadLines(todo).FirstOrDefault(l => l.Length > 0 && l[0] != '#') ?? string.Empty;
+        return next.StartsWith("revert", StringComparison.Ordinal) ? RepositoryOperation.Revert : RepositoryOperation.CherryPick;
+    }
 
     internal static RepositoryOperation MapOperation(CurrentOperation op) => op switch
     {

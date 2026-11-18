@@ -13,8 +13,8 @@
                 </button>
             </ActivatorContent>
             <ChildContent>
-                <MudMenuItem Icon="@Icons.Material.Outlined.FolderOpen" OnClick="@(() => Shortcuts.RaiseAsync("repo.open"))">Open… (Ctrl+O)</MudMenuItem>
-                <MudMenuItem Icon="@Icons.Material.Outlined.CloudDownload" OnClick="@(() => Shortcuts.RaiseAsync("repo.clone"))">Clone… (Ctrl+Shift+O)</MudMenuItem>
+                <MudMenuItem Icon="@Icons.Material.Outlined.FolderOpen" OnClick="@(() => Shortcuts.RaiseAsync("repo.open"))">Open…@Keymap.Hint(W.Settings, "repo.open")</MudMenuItem>
+                <MudMenuItem Icon="@Icons.Material.Outlined.CloudDownload" OnClick="@(() => Shortcuts.RaiseAsync("repo.clone"))">Clone…@Keymap.Hint(W.Settings, "repo.clone")</MudMenuItem>
                 @if (W.Settings.RecentRepositories.Count > 0)
                 {
                     <MudDivider />
@@ -39,11 +39,11 @@
                     </button>
                 </ActivatorContent>
                 <ChildContent>
-                    <MudMenuItem Icon="@Icons.Material.Outlined.Add" OnClick="@(() => Shortcuts.RaiseAsync("branch.new"))">New branch… (Ctrl+B)</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Outlined.Add" OnClick="@(() => Shortcuts.RaiseAsync("branch.new"))">New branch…@Keymap.Hint(W.Settings, "branch.new")</MudMenuItem>
                     @if (s.HeadBranch is { } current)
                     {
-                        <MudMenuItem Icon="@Icons.Material.Outlined.Difference" OnClick="@(() => W.ShowBranchChanges())">Show changes on @current (Ctrl+4)</MudMenuItem>
-                        <MudMenuItem Icon="@Icons.Material.Outlined.MyLocation" OnClick="W.GoToHead">Go to @current in graph (Ctrl+H)</MudMenuItem>
+                        <MudMenuItem Icon="@Icons.Material.Outlined.Difference" OnClick="@(() => W.ShowBranchChanges())">Show changes on @current@Keymap.Hint(W.Settings, "view.changes")</MudMenuItem>
+                        <MudMenuItem Icon="@Icons.Material.Outlined.MyLocation" OnClick="W.GoToHead">Go to @current in graph@Keymap.Hint(W.Settings, "graph.head")</MudMenuItem>
                     }
                     <MudDivider />
                     @foreach (var b in s.LocalBranches.Take(40))
@@ -56,11 +56,11 @@
     </div>
 
     <div class="gf-toolbar-actions">
-        <ToolbarButton Icon="@Icons.Material.Outlined.Undo" Label="Undo" Hint="@(W.Undo.CanUndo ? $"Undo {W.Undo.UndoDescription} (Ctrl+Z)" : "Nothing to undo")" Disabled="@(!W.Undo.CanUndo || W.IsBusy)" OnClick="@(() => Shortcuts.RaiseAsync("edit.undo"))" />
-        <ToolbarButton Icon="@Icons.Material.Outlined.Redo" Label="Redo" Hint="@(W.Undo.CanRedo ? $"Redo {W.Undo.RedoDescription} (Ctrl+Y)" : "Nothing to redo")" Disabled="@(!W.Undo.CanRedo || W.IsBusy)" OnClick="@(() => Shortcuts.RaiseAsync("edit.redo"))" />
+        <ToolbarButton Icon="@Icons.Material.Outlined.Undo" Label="Undo" Hint="@(W.Undo.CanUndo ? $"Undo {W.Undo.UndoDescription}{Keymap.Hint(W.Settings, "edit.undo")}" : "Nothing to undo")" Disabled="@(!W.Undo.CanUndo || W.IsBusy)" OnClick="@(() => Shortcuts.RaiseAsync("edit.undo"))" />
+        <ToolbarButton Icon="@Icons.Material.Outlined.Redo" Label="Redo" Hint="@(W.Undo.CanRedo ? $"Redo {W.Undo.RedoDescription}{Keymap.Hint(W.Settings, "edit.redo")}" : "Nothing to redo")" Disabled="@(!W.Undo.CanRedo || W.IsBusy)" OnClick="@(() => Shortcuts.RaiseAsync("edit.redo"))" />
         <span class="gf-toolbar-sep"></span>
         <div class="gf-split">
-            <ToolbarButton Icon="@Icons.Material.Outlined.Download" Label="Pull" Hint="Pull — fast-forward if possible (Ctrl+Shift+L)" Disabled="@NoRepo" Badge="@(W.CurrentBranchHead?.Behind ?? 0)" OnClick="@(() => Shortcuts.RaiseAsync("remote.pull"))" />
+            <ToolbarButton Icon="@Icons.Material.Outlined.Download" Label="Pull" Hint="@($"Pull — fast-forward if possible{Keymap.Hint(W.Settings, "remote.pull")}")" Disabled="@NoRepo" Badge="@(W.CurrentBranchHead?.Behind ?? 0)" OnClick="@(() => Shortcuts.RaiseAsync("remote.pull"))" />
             <MudMenu Dense="true" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Disabled="@NoRepo">
                 <ActivatorContent Context="menu">
                     <button class="gf-split-arrow" disabled="@NoRepo" title="Pull options" aria-label="Pull options" @onclick="@(e => menu.ToggleAsync(e))">
@@ -68,27 +68,27 @@
                     </button>
                 </ActivatorContent>
                 <ChildContent>
-                    <MudMenuItem Icon="@Icons.Material.Outlined.Sync" OnClick="W.FetchAsync">Fetch all (Ctrl+Shift+F)</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Outlined.Sync" OnClick="W.FetchAsync">Fetch all@Keymap.Hint(W.Settings, "remote.fetch")</MudMenuItem>
                     <MudMenuItem OnClick="@(() => W.PullAsync(PullMode.MergeIfNeeded))">Pull (fast-forward if possible)</MudMenuItem>
                     <MudMenuItem OnClick="@(() => W.PullAsync(PullMode.FastForwardOnly))">Pull (fast-forward only)</MudMenuItem>
                     <MudMenuItem OnClick="@(() => W.PullAsync(PullMode.Rebase))">Pull (rebase)</MudMenuItem>
                 </ChildContent>
             </MudMenu>
         </div>
-        <ToolbarButton Icon="@Icons.Material.Outlined.Upload" Label="Push" Hint="Push (Ctrl+Shift+P)" Disabled="@NoRepo" Badge="@(W.CurrentBranchHead?.Ahead ?? 0)" OnClick="@(() => Shortcuts.RaiseAsync("remote.push"))" />
+        <ToolbarButton Icon="@Icons.Material.Outlined.Upload" Label="Push" Hint="@($"Push{Keymap.Hint(W.Settings, "remote.push")}")" Disabled="@NoRepo" Badge="@(W.CurrentBranchHead?.Ahead ?? 0)" OnClick="@(() => Shortcuts.RaiseAsync("remote.push"))" />
         <span class="gf-toolbar-sep"></span>
-        <ToolbarButton Icon="@Icons.Material.Outlined.CallSplit" Label="Branch" Hint="New branch (Ctrl+B)" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("branch.new"))" />
-        <ToolbarButton Icon="@Icons.Material.Outlined.Inventory2" Label="Stash" Hint="Stash changes (Ctrl+Shift+S)" Disabled="@(NoRepo || !W.HasWip)" OnClick="@(() => Shortcuts.RaiseAsync("stash.save"))" />
+        <ToolbarButton Icon="@Icons.Material.Outlined.CallSplit" Label="Branch" Hint="@($"New branch{Keymap.Hint(W.Settings, "branch.new")}")" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("branch.new"))" />
+        <ToolbarButton Icon="@Icons.Material.Outlined.Inventory2" Label="Stash" Hint="@($"Stash changes{Keymap.Hint(W.Settings, "stash.save")}")" Disabled="@(NoRepo || !W.HasWip)" OnClick="@(() => Shortcuts.RaiseAsync("stash.save"))" />
         <ToolbarButton Icon="@Icons.Material.Outlined.Unarchive" Label="Pop" Hint="Pop the latest stash" Disabled="@(NoRepo || W.Snapshot?.Stashes.Count is null or 0)" OnClick="@(() => Shortcuts.RaiseAsync("stash.pop"))" />
         <span class="gf-toolbar-sep"></span>
-        <ToolbarButton Icon="@Icons.Material.Outlined.Terminal" Label="Console" Hint="Git console (Ctrl+`)" Active="@W.ConsoleOpen" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("console.toggle"))" />
+        <ToolbarButton Icon="@Icons.Material.Outlined.Terminal" Label="Console" Hint="@($"Git console{Keymap.Hint(W.Settings, "console.toggle")}")" Active="@W.ConsoleOpen" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("console.toggle"))" />
     </div>
 
     <div class="gf-toolbar-right">
         <button class="gf-palette-launch" @onclick="@(() => Shortcuts.RaiseAsync("palette.open"))" title="Command palette">
             <MudIcon Icon="@Icons.Material.Outlined.Search" Size="Size.Small" />
             <span>Search commands</span>
-            <kbd>Ctrl+P</kbd>
+            @if (Keymap.Label(W.Settings, "palette.open") is { } paletteKeys) { <kbd>@paletteKeys</kbd> }
         </button>
         <MudTooltip Text="Pull requests">
             <MudIconButton Icon="@Icons.Material.Outlined.MergeType" Size="Size.Small" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("prs.open"))" aria-label="Pull requests" />

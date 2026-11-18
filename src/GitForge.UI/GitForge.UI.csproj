@@ -15,4 +15,7 @@
     <ProjectReference Include="..\GitForge.Hosting\GitForge.Hosting.csproj" />
     <ProjectReference Include="..\GitForge.Platform\GitForge.Platform.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="GitForge.UI.Tests" />
+  </ItemGroup>
 </Project>

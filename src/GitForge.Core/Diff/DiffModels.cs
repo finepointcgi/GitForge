@@ -36,8 +36,8 @@ public sealed record FileDiff(
     public int Deletions => Hunks.Sum(h => h.Lines.Count(l => l.Kind == DiffLineKind.Deleted));
     public int LineCount => Hunks.Sum(h => h.Lines.Count + 1);
 
-    /// <summary>Line- and hunk-level staging is supported for in-place text modifications only.</summary>
-    public bool SupportsPartialStaging => !IsBinary && !IsNewFile && !IsDeletedFile && !IsRename && Hunks.Count > 0;
+    /// <summary>Line- and hunk-level staging is supported for text modifications and new files (not deletions, renames, or binaries).</summary>
+    public bool SupportsPartialStaging => !IsBinary && !IsDeletedFile && !IsRename && Hunks.Count > 0;
 }
 
 public sealed record DiffOptions(bool IgnoreWhitespace = false, int ContextLines = 3);

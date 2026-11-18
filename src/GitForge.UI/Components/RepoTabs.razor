@@ -21,14 +21,14 @@
                 {
                     <span class="gf-tab-dot" title="@($"{changes} uncommitted change(s)")"></span>
                 }
-                <button class="gf-tab-close" title="Close tab (Ctrl+W)" aria-label="@($"Close {s.Name}")" @onclick:stopPropagation="true" @onclick="@(() => W.CloseTabAsync(s))">×</button>
+                <button class="gf-tab-close" title="@($"Close tab{Keymap.Hint(W.Settings, "tab.close")}")" aria-label="@($"Close {s.Name}")" @onclick:stopPropagation="true" @onclick="@(() => W.CloseTabAsync(s))">×</button>
             </div>
         }
-        <button class="gf-tab-add" title="Open a repository in a new tab (Ctrl+T)" aria-label="Open repository in new tab" @onclick="@(() => Shortcuts.RaiseAsync("repo.open"))">+</button>
+        <button class="gf-tab-add" title="@($"Open a repository in a new tab{Keymap.Hint(W.Settings, "repo.open")}")" aria-label="Open repository in new tab" @onclick="@(() => Shortcuts.RaiseAsync("repo.open"))">+</button>
         <span class="gf-spacer"></span>
         @if (W.Sessions.Count > 1)
         {
-            <span class="gf-dim gf-small gf-tabs-hint">Ctrl+Tab to switch</span>
+            @if (Keymap.Label(W.Settings, "tab.next") is { } nextTab) { <span class="gf-dim gf-small gf-tabs-hint">@nextTab to switch</span> }
         }
     </nav>
 }

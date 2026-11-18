@@ -53,8 +53,41 @@
                 <MudCheckBox T="bool" @bind-Value="_signOff" Size="Size.Small" Dense="true" Label="Sign-off" />
                 <MudCheckBox T="bool" @bind-Value="_pushAfter" Size="Size.Small" Dense="true" Label="Push after" />
             </div>
-            <button class="gf-commit-button" disabled="@(!CanCommit)" @onclick="Commit" title="Ctrl+Enter">@CommitLabel</button>
+            <button class="gf-commit-button" disabled="@(!CanCommit)" @onclick="Commit" title="@Keymap.Label(W.Settings, "commit.submit")">@CommitLabel</button>
         </div>
+    }
+    else if (W.MultiSelection.Count > 1)
+    {
+        var picked = W.SelectedCommitsOldestFirst();
+        <div class="gf-panel-head">
+            <MudIcon Icon="@Icons.Material.Outlined.LibraryAddCheck" Size="Size.Small" />
+            <span><strong>@picked.Count</strong> commits selected</span>
+            <span class="gf-spacer"></span>
+            <button class="gf-link-button" title="Esc" @onclick="W.ClearMultiSelection">Clear</button>
+        </div>
+        <div class="gf-multi-actions">
+            <button class="gf-btn gf-btn-stage" disabled="@(W.IsBusy || picked.Count == 0)" @onclick="CherryPickSelection">
+                Cherry-pick @picked.Count commits onto @(W.CurrentBranch ?? "HEAD")
+            </button>
+            @if (picked.Count == 2)
+            {
+                <button class="gf-btn gf-btn-ghost" @onclick="@(() => W.CompareCommits(picked[0].Sha, picked[1].Sha))">Compare these two</button>
+            }
+        </div>
+        <div class="gf-group-head"><span class="gf-group-title">Oldest first (the order they are applied)</span></div>
+        <div class="gf-list gf-panel-files">
+            @foreach (var c in picked)
+            {
+                <div class="gf-history-row" title="@c.Subject" @onclick="@(() => W.SelectCommit(c.Sha, reveal: true))">
+                    <Avatar Name="@c.AuthorName" Email="@c.AuthorEmail" Small="true" />
+                    <div class="gf-grow">
+                        <div class="gf-ellipsis">@(c.IsMerge ? "⚠ merge · " : null)@c.Subject</div>
+                        <div class="gf-dim gf-small gf-ellipsis">@c.AuthorName · @Avatars.When(c.AuthorDate) · <span class="gf-mono">@c.ShortSha</span></div>
+                    </div>
+                </div>
+            }
+        </div>
+        <p class="gf-dim gf-small gf-panel-note">Ctrl+click adds or removes a commit · Shift+click selects a range · Esc clears.</p>
     }
     else if (_details is { } d)
     {
@@ -199,6 +232,18 @@
 
     private void Open(FileStatusEntry f) => W.ShowDiff(new DiffTarget(f, null, null));
 
+    private async Task CherryPickSelection()
+    {
+        var picked = W.SelectedCommitsOldestFirst();
+        if (picked.Count == 0) return;
+        var target = W.CurrentBranch ?? "HEAD";
+        var question = $"Cherry-pick {picked.Count} commits onto {target}, oldest first? Each becomes a new commit on {target}. If one conflicts, GitForge stops so you can resolve it, then continue or abort.";
+        if (await Dialogs.ShowMessageBoxAsync("Cherry-pick commits", question, yesText: "Cherry-pick", cancelText: "Cancel") == true)
+        {
+            await W.CherryPickSelectionAsync();
+        }
+    }
+
     private Task Stage(IReadOnlyCollection<FileStatusEntry> files) =>
         W.RunAsync("Staging", (r, _) => r.Index.StageAsync(files.Select(f => f.Path).ToList()));
 
@@ -213,7 +258,7 @@
     {
         if (files.Count == 0) return;
         var what = files.Count == 1 ? $"'{files.First().Path}'" : $"{files.Count} files";
-        if (await Dialogs.ShowMessageBoxAsync("Discard changes", $"Discard all changes to {what}? You can undo this with Ctrl+Z until your next action.", yesText: "Discard", cancelText: "Cancel") != true) return;
+        if (await Dialogs.ShowMessageBoxAsync("Discard changes", $"Discard all changes to {what}? {Keymap.UndoName(W.Settings)} restores them until your next action.", yesText: "Discard", cancelText: "Cancel") != true) return;
         var list = files.ToList();
         await W.RunUndoableAsync("Discarding", r => UndoableOperations.DiscardAsync(r, () => r.Index.DiscardAsync(list), list.Select(f => f.Path).ToList()));
     }
@@ -234,7 +279,7 @@
     {
         if (!CanCommit) return;
         var request = new CommitRequest(Message, _amend, _signOff, AllowEmpty: _amend && W.Status.Staged.Count == 0);
-        var ok = await W.RunUndoableAsync(_amend ? "Amending" : "Committing", r => UndoableOperations.CommitAsync(r, request), _amend ? "Commit amended (Ctrl+Z to undo)" : "Committed (Ctrl+Z to undo)");
+        var ok = await W.RunUndoableAsync(_amend ? "Amending" : "Committing", r => UndoableOperations.CommitAsync(r, request), _amend ? $"Commit amended ({Keymap.UndoName(W.Settings)} reverses it)" : $"Committed ({Keymap.UndoName(W.Settings)} reverses it)");
         if (!ok) return;
         _summary = _description = string.Empty;
         _amend = false;

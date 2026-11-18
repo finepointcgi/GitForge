@@ -74,3 +74,12 @@ public sealed record PushRequest(
     bool IncludeTags = false);
 
 public sealed record StashRequest(string? Message, bool IncludeUntracked = false, bool KeepIndex = false, IReadOnlyList<string>? Paths = null);
+
+/// <summary>One file saved in a stash. <see cref="Untracked"/> files were saved with "include untracked files".</summary>
+public sealed record StashFile(FileChange Change, bool Untracked);
+
+/// <summary>
+/// What a stash holds: <see cref="Sha"/> is the stash commit, <see cref="BaseSha"/> the commit it was made on, and
+/// <see cref="UntrackedSha"/> the commit holding its untracked files (null when it has none).
+/// </summary>
+public sealed record StashContents(string Sha, string BaseSha, string? UntrackedSha, IReadOnlyList<StashFile> Files);

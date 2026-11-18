@@ -52,6 +52,12 @@
                     case CenterView.BranchChanges:
                         <BranchChangesView @key="(W.BranchCompare, W.CurrentBranch)" />
                         break;
+                    case CenterView.Stash:
+                        <StashView @key="W.OpenStashSha" />
+                        break;
+                    case CenterView.Compare:
+                        <CompareView @key="W.CommitCompare" />
+                        break;
                     default:
                         <GraphView />
                         break;
@@ -99,7 +105,7 @@
         <span class="gf-spacer"></span>
         @if (W.Undo.CanUndo && !W.IsBusy)
         {
-            <span class="gf-dim">Ctrl+Z: undo @W.Undo.UndoDescription</span>
+            <span class="gf-dim">@Keymap.UndoName(W.Settings): undo @W.Undo.UndoDescription</span>
         }
         <span class="gf-dim">@_gitVersionText</span>
     </footer>
@@ -119,7 +125,7 @@
         Shortcuts.Command += OnCommand;
         await W.InitializeAsync();
         _theme = GitForgeTheme.Create(W.Settings.AccentColor);
-        Shortcuts.VimNavigation = W.Settings.VimNavigation;
+        Shortcuts.Configure(W.Settings);
         SettingsStore.Changed += OnSettingsChanged;
         StartupTrace.Mark("blazor: settings loaded");
 
@@ -168,8 +174,11 @@
     private void OnSettingsChanged(object? sender, AppSettings s)
     {
         _theme = GitForgeTheme.Create(s.AccentColor);
-        Shortcuts.VimNavigation = s.VimNavigation;
-        _ = InvokeAsync(StateHasChanged);
+        _ = InvokeAsync(async () =>
+        {
+            await Shortcuts.ApplyAsync(s);
+            StateHasChanged();
+        });
     }
 
     private void OnChanged() => _ = InvokeAsync(StateHasChanged);
@@ -223,7 +232,7 @@
             case "accounts.open": await Show<AccountsDialog>("Hosting accounts", MaxWidth.Medium); break;
             case "settings.open": await Show<SettingsDialog>("Settings"); break;
             case "theme.toggle": await ToggleTheme(); break;
-            case "help.shortcuts": await Show<ShortcutsDialog>("Keyboard shortcuts"); break;
+            case "help.shortcuts": await Show<ShortcutsDialog>("Keyboard shortcuts", MaxWidth.Medium); break;
         }
     }
 

@@ -34,19 +34,20 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 | Console | Integrated git command console bound to the active repository | 🟡 (argv console; full PTY terminal in Phase 3) |
 | Submodules | Recursive status tree; automatic sync + `update --init --recursive` after HEAD moves (changed pins only, dirty submodules skipped); init on open; manual update (all or one) | ✅ |
 
-## Phase 2 — Power-user workflow (target: +6 weeks)
+## Phase 2 — Power-user workflow (complete)
 
 - ✅ Syntax highlighting in diffs and blame via TextMateSharp (VS Code grammars, Dark+/Light+; tokenizes only rendered rows; old/new sides tokenized separately).
 - ✅ Built-in 3-way conflict editor (mine/base/theirs per conflict; mine, theirs, both, base, or hand edit; m/t/b/n/p/Ctrl+S) alongside external tools; modify/delete conflicts handled.
-- ⬜ Customizable key bindings; drag a branch onto another to merge or rebase.
+- ✅ Customizable key bindings: shortcut editor with conflict detection, per-command and full reset, saved in settings; tooltips, menus, and the command palette follow the user's keys.
+- ✅ Drag a branch onto another (sidebar or graph label) to merge into it or rebase onto it, with a confirmation that explains both.
 - ✅ File history (follows renames) and blame (working tree or any revision, age-shaded gutter).
 - ✅ Branch changes view (Ctrl+4): commits and combined diff since the merge base with a chosen branch, optionally including uncommitted work.
 - ✅ Resizable graph columns (drag header borders; double-click or header menu to reset; persisted).
 - ✅ WIP row pinned to the top of the graph with a dashed connector to HEAD that never runs along another branch line.
 - ✅ Plain-language "remote deleted" branches: explanation, push again, stop tracking, and safe bulk clean-up (`git branch -d`).
-- ⬜ Multi-select cherry-pick; compare any two commits (branch-to-branch is covered by the branch changes view).
-- ⬜ Stash preview pane and hunk-level stash (`git stash push --patch` equivalent via patches).
-- ⬜ Line staging for new (untracked) files via intent-to-add.
+- ✅ Multi-select commits (Ctrl+click, Shift+click, Shift+↓/↑): cherry-pick several, oldest first; compare any two commits or a commit with the working tree. A stalled multi-commit cherry-pick is detected and can be continued or aborted.
+- ✅ Stash preview pane (tracked and untracked files with diffs; apply, pop, drop) and hunk/line stash (`git stash push --patch` equivalent via patches). Applying into files with other uncommitted edits falls back to an atomic patch.
+- ✅ Line and hunk staging, unstaging, and discarding for new files (untracked or newly added), via partial new-file patches; text is normalized as `git add` would store it.
 - ✅ Multi-repository tabs (Ctrl+Tab, Ctrl+W, middle-click close; restored on launch; background tabs catch up on activation).
 
 ## Phase 3 — Enterprise scale (target: +6 weeks)

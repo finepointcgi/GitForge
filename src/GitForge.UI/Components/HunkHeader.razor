@@ -5,6 +5,10 @@
         @if (Area == StagingArea.Unstaged)
         {
             <button class="gf-link-button" @onclick="@(() => OnApply.InvokeAsync((Hunk, PatchAction.Stage)))">Stage hunk</button>
+            @if (CanStash)
+            {
+                <button class="gf-link-button" title="Move this hunk into a new stash" @onclick="@(() => OnStash.InvokeAsync(Hunk))">Stash hunk</button>
+            }
             <button class="gf-link-button danger" @onclick="@(() => OnApply.InvokeAsync((Hunk, PatchAction.Discard)))">Discard hunk</button>
         }
         else if (Area == StagingArea.Staged)
@@ -19,4 +23,8 @@
     [Parameter] public StagingArea? Area { get; set; }
     [Parameter] public bool CanApply { get; set; }
     [Parameter] public EventCallback<(DiffHunk Hunk, PatchAction Action)> OnApply { get; set; }
+
+    /// <summary>Offer "Stash hunk" (unstaged changes to a tracked file without staged changes).</summary>
+    [Parameter] public bool CanStash { get; set; }
+    [Parameter] public EventCallback<DiffHunk> OnStash { get; set; }
 }

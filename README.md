@@ -4,7 +4,11 @@ A fast, keyboard-first Git client for Windows, built with C#/.NET 10, Blazor, an
 
 - **Graph-centric workspace:** refs on the left, the commit graph in the center (with a WIP row for uncommitted work, always at the top and joined to your branch by a dashed line), and a commit panel on the right for staging, messages, and commit details.
 - **Fast on big repositories:** streamed history, incremental graph layout, and virtualized lists and diffs.
-- **High-velocity staging:** hunk- and line-level stage, unstage, and discard from the keyboard.
+- **High-velocity staging:** hunk- and line-level stage, unstage, and discard from the keyboard, including new (untracked) files.
+- **Stashes you can see into:** click a stash to preview its files and diffs, then apply, pop, or drop it. Stash just a hunk or selected lines (like `git stash push --patch`); popping them back works even when the file still has your other edits.
+- **Multi-select commits:** Ctrl+click or Shift+click (Shift+↓/↑ from the keyboard) to cherry-pick several commits at once, oldest first, or compare any two commits (or a commit with your working tree).
+- **Drag and drop branches:** drop one branch on another, in the sidebar or the graph, to merge or rebase.
+- **Customizable keyboard shortcuts:** rebind any command, with conflict warnings (press ?, or Settings › Customize keyboard shortcuts).
 - **Undo/redo (Ctrl+Z / Ctrl+Y):** commit, checkout, branch create/delete, reset, and discard (including untracked files).
 - **Command palette (Ctrl+P):** fuzzy search across actions, branches, and recent repositories; hide or solo branches in the graph.
 - **Repository tabs:** several repositories open at once (Ctrl+Tab to switch, Ctrl+W to close); tabs are restored on launch.
@@ -13,7 +17,7 @@ A fast, keyboard-first Git client for Windows, built with C#/.NET 10, Blazor, an
 - **Syntax highlighting** in diffs and blame using VS Code's TextMate grammars, computed only for the lines on screen.
 - **Git LFS:** LFS file badges, tracked patterns, and server file locks (lock, unlock, force-unlock with confirmation).
 - **Automatic recursive submodules:** after checkout, pull, merge, rebase, reset, or undo, submodules whose recorded commit changed are synced and updated (`--init --recursive`); submodules with local changes are never overwritten. Uninitialized submodules are initialized on open. Toggle in **Settings**.
-- **Advanced Git:** visual interactive rebase, reflog recovery, conflict tools, stash manager, submodules.
+- **Advanced Git:** visual interactive rebase, reflog recovery, conflict tools, submodules.
 - **Multi-account hosting:** tokens in Windows Credential Manager, repository browser, pull request list.
 - **Forest-green dark theme** matching the GitForge icon. The accent color defaults to GitForge green (a darker green in light mode, for contrast) and can be changed in **Settings**.
 - **Secure by default:** no telemetry, HTTPS APIs by default (plain HTTP only for self-hosted servers you explicitly configure that way), no plaintext secrets on disk, hooks and signing honored.
@@ -77,13 +81,16 @@ dotnet run --project src/GitForge.DevHost
 | Ctrl+Enter | Commit |
 | Ctrl+` | Git console |
 | j / k, gg / G | Next / previous, first / last (graph, commit panel, or diff) |
+| Shift+↓ / Shift+↑ (or Shift+J / Shift+K) | Extend the commit selection in the graph (Esc clears it) |
 | h / l | Focus graph / commit panel |
 | s / u / d | Stage / unstage / discard (file, hunk, or selected lines) |
 | Space | Toggle line selection in a diff |
 | / or Ctrl+F | Filter commits |
-| ? | Show all shortcuts |
+| ? | Show and customize all shortcuts |
 
-Click a branch to jump to its commit; double-click to check it out. Hover a branch to hide it from the graph, or right-click to solo it. Right-click branches, tags, stashes, and commits for more actions.
+These are the defaults; every shortcut can be changed or removed (press **?**). Single-key shortcuts work outside text fields while vim-style navigation is on in **Settings**.
+
+Click a branch to jump to its commit; double-click to check it out; drag it onto another branch to merge or rebase. Hover a branch to hide it from the graph, or right-click to solo it. Click a stash to preview it. Right-click branches, tags, stashes, and commits for more actions.
 
 Drag the borders in the graph header to resize columns; double-click a border, or right-click the header and choose **Reset column widths**, to restore defaults. Widths are remembered.
 

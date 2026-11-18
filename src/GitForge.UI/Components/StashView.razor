@@ -1,0 +1,139 @@
+@implements IDisposable
+@inject RepoWorkspace W
+@inject IDialogService Dialogs
+
+@* Read-only preview of one stash: its files and diffs, with apply, pop, and drop. Stash commits never change, so
+   the contents load once; the header follows the stash list (indexes shift as other stashes come and go). *@
+<div class="gf-fileview">
+    <div class="gf-diffpane-head gf-compare-head">
+        <button class="gf-back" @onclick="W.ShowGraph" title="Back to graph (Esc)"><MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Size="Size.Small" /> Graph</button>
+        <MudIcon Icon="@Icons.Material.Outlined.Inventory2" Size="Size.Small" />
+        @if (Stash is { } st)
+        {
+            <span class="gf-ellipsis gf-stash-title" title="@st.Message"><strong>@st.Message</strong></span>
+            <span class="gf-dim gf-small gf-nowrap" title="@st.When.LocalDateTime.ToString("F", CultureInfo.CurrentCulture)">@st.RefSpec · @Avatars.When(st.When)</span>
+            <button class="gf-btn gf-btn-stage" title="Apply these changes and keep the stash" disabled="@W.IsBusy" @onclick="@(() => ApplyAsync(st, pop: false))">Apply</button>
+            <button class="gf-btn gf-btn-ghost" title="Apply these changes, then drop the stash" disabled="@W.IsBusy" @onclick="@(() => ApplyAsync(st, pop: true))">Pop</button>
+            <button class="gf-btn gf-btn-danger" disabled="@W.IsBusy" @onclick="@(() => DropAsync(st))">Drop…</button>
+        }
+        else
+        {
+            <span class="gf-dim gf-grow">This stash is no longer in the stash list.</span>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+    }
+    else if (_error is not null)
+    {
+        <div class="gf-empty">@_error</div>
+    }
+    else if (_contents is { } c)
+    {
+        var tracked = c.Files.Where(f => !f.Untracked).ToList();
+        var untracked = c.Files.Where(f => f.Untracked).ToList();
+        <div class="gf-split-x gf-grow-pane" id="gf-stashview">
+            <div class="gf-pane">
+                <div class="gf-scroll">
+                    <div class="gf-group-head" title="Compared with @c.BaseSha[..7], the commit the stash was made on">
+                        <span class="gf-group-title">Changes</span><span class="gf-count">@tracked.Count</span>
+                    </div>
+                    @foreach (var f in tracked)
+                    {
+                        <FileChangeRow Change="f.Change" Selected="@(f == _file)" OnClick="@(() => SelectFileAsync(f))" />
+                    }
+                    @if (tracked.Count == 0)
+                    {
+                        <div class="gf-empty gf-small">No changes to tracked files.</div>
+                    }
+                    @if (untracked.Count > 0)
+                    {
+                        <div class="gf-group-head"><span class="gf-group-title">Untracked files</span><span class="gf-count">@untracked.Count</span></div>
+                        @foreach (var f in untracked)
+                        {
+                            <FileChangeRow Change="f.Change" Selected="@(f == _file)" OnClick="@(() => SelectFileAsync(f))" />
+                        }
+                    }
+                </div>
+            </div>
+            <div class="gf-splitter gf-splitter-x" data-var="--gf-files-w" data-target="gf-stashview" data-min="240" data-max="900"></div>
+            <div class="gf-pane">
+                <DiffViewer Diff="_diff" Loading="_diffLoading" Title="@_file?.Change.Path" Placeholder="Select a file to see what the stash changes in it" />
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private string? _sha;
+    private StashContents? _contents;
+    private StashFile? _file;
+    private FileDiff? _diff;
+    private bool _loading, _diffLoading;
+    private string? _error;
+
+    private StashInfo? Stash => W.Snapshot?.Stashes.FirstOrDefault(s => s.Sha == _sha);
+
+    protected override async Task OnInitializedAsync()
+    {
+        W.Changed += OnChanged;
+        _sha = W.OpenStashSha;
+        if (_sha is null || W.Repo is not { } repo) return;
+
+        _loading = true;
+        try
+        {
+            var sha = _sha;
+            _contents = await Task.Run(() => repo.Stashes.GetContentsAsync(sha));
+            if (_contents.Files.Count > 0) await SelectFileAsync(_contents.Files[0]);
+        }
+        catch (Exception ex)
+        {
+            _error = "Could not read the stash: " + (ex is GitCommandException g ? g.GitMessage : ex.Message);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SelectFileAsync(StashFile f)
+    {
+        if (W.Repo is not { } repo || _contents is not { } contents) return;
+        _file = f;
+        _diffLoading = true;
+        StateHasChanged();
+        try
+        {
+            var options = new DiffOptions(W.Settings.IgnoreWhitespace);
+            var diff = await Task.Run(() => repo.Stashes.GetDiffAsync(contents, f, options));
+            if (_file == f) _diff = diff;
+        }
+        catch (Exception ex)
+        {
+            W.Error("Load diff", ex);
+        }
+        finally
+        {
+            _diffLoading = false;
+        }
+    }
+
+    private async Task ApplyAsync(StashInfo st, bool pop)
+    {
+        var ok = await W.RunAsync(pop ? "Popping stash" : "Applying stash", (r, _) => r.Stashes.ApplyAsync(st.Index, pop, restoreIndex: false), pop ? "Stash popped" : "Stash applied");
+        if (ok) W.GoToWip();
+    }
+
+    private async Task DropAsync(StashInfo st)
+    {
+        if (await Dialogs.ShowMessageBoxAsync("Drop stash", $"Drop '{st.Message}'? It cannot be recovered from the UI afterwards.", yesText: "Drop", cancelText: "Cancel") != true) return;
+        if (await W.RunAsync("Dropping stash", (r, _) => r.Stashes.DropAsync(st.Index), "Stash dropped")) W.ShowGraph();
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => W.Changed -= OnChanged;
+}

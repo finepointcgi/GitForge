@@ -46,43 +46,44 @@
     protected override void OnInitialized()
     {
         Func<Task> Cmd(string id) => () => Shortcuts.RaiseAsync(id);
+        string? K(string id) => Keymap.Label(W.Settings, id);
         var hasRepo = W.Repo is not null;
         _all =
         [
-            new("Open repository…", "Repository", Icons.Material.Outlined.FolderOpen, "Ctrl+O", Cmd("repo.open")),
-            new("Clone repository…", "Repository", Icons.Material.Outlined.CloudDownload, "Ctrl+Shift+O", Cmd("repo.clone")),
-            new("Hosting accounts…", "Settings", Icons.Material.Outlined.ManageAccounts, null, Cmd("accounts.open")),
-            new("Settings…", "Settings", Icons.Material.Outlined.Settings, null, Cmd("settings.open")),
-            new("Toggle light / dark theme", "Settings", Icons.Material.Outlined.DarkMode, null, Cmd("theme.toggle")),
-            new("Keyboard shortcuts", "Help", Icons.Material.Outlined.Keyboard, "?", Cmd("help.shortcuts")),
+            new("Open repository…", "Repository", Icons.Material.Outlined.FolderOpen, K("repo.open"), Cmd("repo.open")),
+            new("Clone repository…", "Repository", Icons.Material.Outlined.CloudDownload, K("repo.clone"), Cmd("repo.clone")),
+            new("Hosting accounts…", "Settings", Icons.Material.Outlined.ManageAccounts, K("accounts.open"), Cmd("accounts.open")),
+            new("Settings…", "Settings", Icons.Material.Outlined.Settings, K("settings.open"), Cmd("settings.open")),
+            new("Toggle light / dark theme", "Settings", Icons.Material.Outlined.DarkMode, K("theme.toggle"), Cmd("theme.toggle")),
+            new("Keyboard shortcuts", "Help", Icons.Material.Outlined.Keyboard, K("help.shortcuts"), Cmd("help.shortcuts")),
         ];
 
         if (hasRepo)
         {
             _all.InsertRange(0,
             [
-                new("Fetch all remotes", "Remote", Icons.Material.Outlined.Sync, "Ctrl+Shift+F", W.FetchAsync),
-                new("Pull (fast-forward if possible)", "Remote", Icons.Material.Outlined.Download, "Ctrl+Shift+L", () => W.PullAsync(PullMode.MergeIfNeeded)),
+                new("Fetch all remotes", "Remote", Icons.Material.Outlined.Sync, K("remote.fetch"), W.FetchAsync),
+                new("Pull (fast-forward if possible)", "Remote", Icons.Material.Outlined.Download, K("remote.pull"), () => W.PullAsync(PullMode.MergeIfNeeded)),
                 new("Pull (fast-forward only)", "Remote", Icons.Material.Outlined.Download, null, () => W.PullAsync(PullMode.FastForwardOnly)),
                 new("Pull (rebase)", "Remote", Icons.Material.Outlined.Download, null, () => W.PullAsync(PullMode.Rebase)),
-                new("Push", "Remote", Icons.Material.Outlined.Upload, "Ctrl+Shift+P", Cmd("remote.push")),
+                new("Push", "Remote", Icons.Material.Outlined.Upload, K("remote.push"), Cmd("remote.push")),
                 new("Push (force with lease)", "Remote", Icons.Material.Outlined.Upload, null, () => W.PushAsync(force: true)),
-                new("New branch…", "Branch", Icons.Material.Outlined.CallSplit, "Ctrl+B", Cmd("branch.new")),
-                new("Stash changes…", "Stash", Icons.Material.Outlined.Inventory2, "Ctrl+Shift+S", Cmd("stash.save")),
-                new("Pop latest stash", "Stash", Icons.Material.Outlined.Unarchive, null, W.PopStashAsync),
+                new("New branch…", "Branch", Icons.Material.Outlined.CallSplit, K("branch.new"), Cmd("branch.new")),
+                new("Stash changes…", "Stash", Icons.Material.Outlined.Inventory2, K("stash.save"), Cmd("stash.save")),
+                new("Pop latest stash", "Stash", Icons.Material.Outlined.Unarchive, K("stash.pop"), W.PopStashAsync),
                 new("Update submodules (recursive)", "Submodules", Icons.Material.Outlined.Extension, null, W.UpdateSubmodulesAsync),
-                new("Next repository tab", "Tabs", Icons.Material.Outlined.Tab, "Ctrl+Tab", Cmd("tab.next")),
-                new("Close repository tab", "Tabs", Icons.Material.Outlined.Close, "Ctrl+W", Cmd("tab.close")),
-                new(W.Undo.CanUndo ? $"Undo {W.Undo.UndoDescription}" : "Undo", "Edit", Icons.Material.Outlined.Undo, "Ctrl+Z", Cmd("edit.undo")),
-                new(W.Undo.CanRedo ? $"Redo {W.Undo.RedoDescription}" : "Redo", "Edit", Icons.Material.Outlined.Redo, "Ctrl+Y", Cmd("edit.redo")),
-                new("Go to WIP (stage and commit)", "View", Icons.Material.Outlined.EditNote, "Ctrl+1", Cmd("view.status")),
-                new("Go to commit graph", "View", Icons.Material.Outlined.AccountTree, "Ctrl+2", Cmd("view.history")),
-                new("Reflog — recover lost work", "View", Icons.Material.Outlined.Restore, "Ctrl+3", Cmd("view.reflog")),
-                new("Changes on current branch (since it branched)", "View", Icons.Material.Outlined.Difference, "Ctrl+4", Cmd("view.changes")),
-                new("Go to current branch in graph", "View", Icons.Material.Outlined.MyLocation, "Ctrl+H", Cmd("graph.head")),
+                new("Next repository tab", "Tabs", Icons.Material.Outlined.Tab, K("tab.next"), Cmd("tab.next")),
+                new("Close repository tab", "Tabs", Icons.Material.Outlined.Close, K("tab.close"), Cmd("tab.close")),
+                new(W.Undo.CanUndo ? $"Undo {W.Undo.UndoDescription}" : "Undo", "Edit", Icons.Material.Outlined.Undo, K("edit.undo"), Cmd("edit.undo")),
+                new(W.Undo.CanRedo ? $"Redo {W.Undo.RedoDescription}" : "Redo", "Edit", Icons.Material.Outlined.Redo, K("edit.redo"), Cmd("edit.redo")),
+                new("Go to WIP (stage and commit)", "View", Icons.Material.Outlined.EditNote, K("view.status"), Cmd("view.status")),
+                new("Go to commit graph", "View", Icons.Material.Outlined.AccountTree, K("view.history"), Cmd("view.history")),
+                new("Reflog — recover lost work", "View", Icons.Material.Outlined.Restore, K("view.reflog"), Cmd("view.reflog")),
+                new("Changes on current branch (since it branched)", "View", Icons.Material.Outlined.Difference, K("view.changes"), Cmd("view.changes")),
+                new("Go to current branch in graph", "View", Icons.Material.Outlined.MyLocation, K("graph.head"), Cmd("graph.head")),
                 new("Show all branches in graph", "View", Icons.Material.Outlined.Visibility, null, W.ShowAllRefsAsync),
-                new("Toggle git console", "View", Icons.Material.Outlined.Terminal, "Ctrl+`", Cmd("console.toggle")),
-                new("Pull requests…", "Remote", Icons.Material.Outlined.MergeType, null, Cmd("prs.open")),
+                new("Toggle git console", "View", Icons.Material.Outlined.Terminal, K("console.toggle"), Cmd("console.toggle")),
+                new("Pull requests…", "Remote", Icons.Material.Outlined.MergeType, K("prs.open"), Cmd("prs.open")),
             ]);
 
             if (W.OpenDiff?.Path is { Length: > 0 } openPath)

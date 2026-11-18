@@ -46,6 +46,13 @@ public sealed record AppSettings
     public bool ShowDateColumn { get; init; } = true;
     public bool ShowShaColumn { get; init; }
     public bool IgnoreWhitespace { get; init; }
+
+    /// <summary>
+    /// Keyboard shortcuts the user changed: command id → its complete list of key chords ("Ctrl+Shift+F", "g g"); an
+    /// empty list unbinds the command. Commands not listed keep their defaults.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> KeyBindings { get; init; } = new Dictionary<string, IReadOnlyList<string>>();
+
     public IReadOnlyList<string> RecentRepositories { get; init; } = [];
 
     /// <summary>Repository tabs open at the end of the last session (restored on launch).</summary>

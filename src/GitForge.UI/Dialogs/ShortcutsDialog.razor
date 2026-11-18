@@ -1,14 +1,69 @@
+@inject ISettingsStore SettingsStore
+@inject IDialogService Dialogs
+
+@* Every command with its shortcuts. "+ Add" records the next key press; × removes a shortcut. Changes save at once. *@
 <MudDialog>
     <DialogContent>
-        <table class="gf-table gf-shortcuts">
-            <tbody>
-                @foreach (var (keys, _, description) in ShortcutService.Map)
-                {
-                    <tr><td><kbd>@keys</kbd></td><td>@description</td></tr>
-                }
-            </tbody>
-        </table>
-        <p class="gf-dim gf-small">Single-key shortcuts work outside text fields when vim-style navigation is on. Right-click branches, tags, stashes, and commits for more actions.</p>
+        <div class="gf-dialog-row gf-shortcuts-filter">
+            <MudIcon Icon="@Icons.Material.Outlined.Search" Size="Size.Small" Class="gf-dim" />
+            <input class="gf-input gf-grow" placeholder="Filter by command or key" @bind="_filter" @bind:event="oninput" aria-label="Filter shortcuts" />
+            @if (Keymap.Overrides(Settings).Count > 0)
+            {
+                <button class="gf-link-button" @onclick="@(() => SaveAsync(s => Keymap.Reset(s, null)))">Reset all to defaults</button>
+            }
+        </div>
+        @if (_message is not null)
+        {
+            <p class="gf-small gf-warn" role="status">@_message</p>
+        }
+        <div class="gf-shortcuts-scroll">
+            <table class="gf-table gf-shortcuts">
+                <tbody>
+                    @foreach (var group in Visible().GroupBy(c => c.Group))
+                    {
+                        <tr><th colspan="3" class="gf-group-title">@group.Key</th></tr>
+                        @foreach (var c in group)
+                        {
+                            var changed = Keymap.Overrides(Settings).ContainsKey(c.Id);
+                            <tr class="@(changed ? "changed" : null)">
+                                <td>@c.Description</td>
+                                <td>
+                                    <div class="gf-keys">
+                                        @foreach (var chord in Keymap.Effective(Settings, c.Id))
+                                        {
+                                            var label = Keymap.Display(chord);
+                                            <span class="gf-key-chip">
+                                                <kbd class="@(InactiveNow(chord) ? "gf-dim" : null)" title="@(InactiveNow(chord) ? "Turn on vim-style navigation in Settings to use single-key shortcuts" : null)">@label</kbd>
+                                                <button type="button" title="Remove @label" aria-label="@($"Remove {label} from {c.Description}")" @onclick="@(() => SaveAsync(s => Keymap.WithoutBinding(s, c.Id, chord)))">×</button>
+                                            </span>
+                                        }
+                                        @if (_capturing == c.Id)
+                                        {
+                                            <input @ref="_captureBox" class="gf-key-capture" readonly placeholder="Press keys… (Esc cancels)" aria-label="@($"Press the new shortcut for {c.Description}")"
+                                                   @onkeydown="@(e => CaptureAsync(c, e))" @onkeydown:preventDefault="true" @onkeydown:stopPropagation="true" @onblur="CancelCapture" />
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="gf-link-button" aria-label="@($"Add a shortcut for {c.Description}")" @onclick="@(() => StartCapture(c))">+ Add</button>
+                                        }
+                                    </div>
+                                </td>
+                                <td>
+                                    @if (changed)
+                                    {
+                                        <button type="button" class="gf-link-button" title="Back to @(c.Defaults.Count == 0 ? "no shortcut" : string.Join(", ", c.Defaults))" @onclick="@(() => SaveAsync(s => Keymap.Reset(s, c.Id)))">Reset</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+        <p class="gf-dim gf-small">
+            Single-key shortcuts (letters, Space, ?) work outside text fields while vim-style navigation is on in Settings@(Settings.VimNavigation ? "." : " (it is off now).")
+            Shortcuts with Ctrl or Alt, function keys, and Esc also work while typing. Right-click branches, tags, stashes, and commits for more actions.
+        </p>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="@(() => Dialog.Close())">Close</MudButton>
@@ -17,4 +72,71 @@
 
 @code {
     [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    private string _filter = string.Empty;
+    private string? _capturing;
+    private bool _focusCapture;
+    private string? _message;
+    private ElementReference _captureBox;
+
+    private AppSettings Settings => SettingsStore.Current;
+
+    private bool InactiveNow(string chord) => !Settings.VimNavigation && Keymap.IsSingleKey(chord);
+
+    private IEnumerable<ShortcutCommand> Visible() => string.IsNullOrWhiteSpace(_filter)
+        ? Keymap.Commands
+        : Keymap.Commands.Where(c => c.Description.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+            || c.Group.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+            || Keymap.Effective(Settings, c.Id).Any(k => Keymap.Display(k).Contains(_filter, StringComparison.OrdinalIgnoreCase)));
+
+    private void StartCapture(ShortcutCommand c)
+    {
+        _capturing = c.Id;
+        _focusCapture = true;
+        _message = null;
+    }
+
+    private void CancelCapture() => _capturing = null;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusCapture) return;
+        _focusCapture = false;
+        await _captureBox.FocusAsync();
+    }
+
+    private async Task CaptureAsync(ShortcutCommand c, KeyboardEventArgs e)
+    {
+        var chord = Keymap.FromInput(new KeyInput(e.Key, e.CtrlKey, e.ShiftKey, e.AltKey, e.MetaKey, InInput: false));
+        if (chord is null) return; // a modifier on its own: keep listening
+        _capturing = null;
+        if (chord == "escape") return;
+
+        var label = Keymap.Display(chord);
+        if (Keymap.ReservedReason(chord) is { } reason)
+        {
+            _message = $"{label} can't be a shortcut: it {reason}.";
+            return;
+        }
+
+        var settings = Settings;
+        var owner = Keymap.OwnerOf(settings, chord);
+        if (owner == c.Id) return;
+        if (owner is not null && Keymap.Find(owner) is { } other)
+        {
+            var move = await Dialogs.ShowMessageBoxAsync("Shortcut in use", $"{label} is assigned to \"{other.Description}\". Move it to \"{c.Description}\"?", yesText: "Move it", cancelText: "Cancel");
+            if (move != true) return;
+        }
+
+        await SaveAsync(s => Keymap.WithBinding(s, c.Id, chord));
+        _message = Keymap.IsSingleKey(chord) && !settings.VimNavigation
+            ? $"{label} is saved, but single-key shortcuts only work while vim-style navigation is on in Settings."
+            : null;
+    }
+
+    private async Task SaveAsync(Func<AppSettings, AppSettings> change)
+    {
+        await SettingsStore.UpdateAsync(change);
+        StateHasChanged();
+    }
 }
