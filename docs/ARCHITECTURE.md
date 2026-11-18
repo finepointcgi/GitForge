@@ -77,22 +77,25 @@ flowchart LR
 
 ```
 GitSource/
-├─ GitForge.slnx                 Solution (9 projects)
+├─ GitForge.slnx                 Solution (10 projects)
 ├─ Directory.Build.props         net10.0, nullable, analyzers (latest-recommended)
 ├─ Directory.Packages.props      Central package versions
 ├─ global.json                   SDK pin + Microsoft.Testing.Platform runner
+├─ dotnet-tools.json             Pinned local tools (vpk, the Velopack packager)
+├─ .github/workflows/            ci.yml (build + test), release.yml (tag → signed installers + update feed)
 ├─ src/
 │  ├─ GitForge.Core/             Pure domain: Models/, Graph/, Diff/, Rebase/, Hosting/, Validation/, Abstractions/
 │  ├─ GitForge.Git/              Cli/GitCli, Engine/ (LibGit2Worker, RepositoryWatcher, Reader, WriteOperations), GitRepository(+Factory)
 │  ├─ GitForge.Platform/         Secrets/ (Windows Credential Manager, libsecret), Settings/ (atomic JSON)
 │  ├─ GitForge.Hosting/          HostingProviderBase, Providers (GitHub/GitLab/Bitbucket/Azure DevOps), AccountService
 │  ├─ GitForge.UI/               GitForgeApp.razor, Components/, Dialogs/, Services/, wwwroot/ (css, js)
-│  ├─ GitForge.Desktop/          WPF host (WebView2), native folder picker, app.manifest
+│  ├─ GitForge.Desktop/          WPF host (WebView2), Program (Velopack hooks), VelopackUpdater, native folder picker, app.manifest
 │  └─ GitForge.DevHost/          Loopback-only Blazor Server host for UI iteration and automated checks
 ├─ tests/
 │  ├─ GitForge.Core.Tests/       Graph layout, diff parsing, patch building, URL parsing, validation
-│  └─ GitForge.Git.Tests/        Integration tests against real temporary repositories
-└─ docs/                         ARCHITECTURE.md, ROADMAP.md
+│  ├─ GitForge.Git.Tests/        Integration tests against real temporary repositories
+│  └─ GitForge.UI.Tests/         Keymap, theme, highlighting, update feed and update-flow tests
+└─ docs/                         ARCHITECTURE.md, ROADMAP.md, RELEASING.md
 ```
 
 Dependency rule: `Core` depends on nothing. `Git`, `Platform`, and `Hosting` depend only on `Core`. `UI` composes them. Hosts depend only on `UI`. Adding a macOS/Linux host (Photino or MAUI) requires no changes below `UI`.
@@ -193,6 +196,10 @@ Sidebar branch rows and graph branch labels are HTML5 drag sources; local branch
 
 `Keymap` is the command catalog (id, group, description, default chords) and the chord grammar. Chords are canonical and layout-aware: modifiers in the order ctrl, alt, shift, then the key as the browser reports it, lower-cased (`ctrl+shift+f`, `shift+g`, `?`); Shift counts only for letters and named keys. Two-step sequences such as `g g` are supported. `AppSettings.KeyBindings` stores only commands the user changed. `ShortcutService` builds the chord tables and sends gitforge.js the exact list of chords to capture, so unbound keys are never intercepted; F5 is always swallowed so the app can't reload itself. Single-key chords (j, ?, Space) fire only outside text fields and only while vim-style navigation is on; chords with Ctrl or Alt, function keys, and Esc also fire while typing, except undo and redo, which stay native in text fields. The editor detects clashes (including a key that would hide a sequence), moves a chord after confirmation, and refuses keys that must keep their meaning (Tab, Ctrl+C/X/V/A, Alt+F4). Tooltips, menus, and the command palette read labels from the live keymap.
 
+### Updates
+
+`IAppUpdater` is the host's updater: `VelopackUpdater` in the desktop app, `NoAppUpdater` in the dev host. `UpdateService` (UI) owns the state shown in the status bar, the Updates dialog, and Settings: it resolves the feed (machine policy, then the user's setting, then the `GitForgeUpdateFeed` assembly metadata, which defaults to this repository's GitHub releases), checks 15 seconds after launch and at most daily, and downloads and applies only when the user chooses **Update and restart**. `UpdateFeed.TryParse` accepts GitHub repository URLs, https feeds (http only for loopback), and fully qualified folder or UNC paths. `Program.Main` runs `VelopackApp.Build().Run()` before WPF starts so install, update, and uninstall hooks work, and a downloaded update that wasn't applied is applied on the next start. Velopack verifies each package's SHA-256 against the release index before installing. Copies not installed through Velopack report why they can't update. See [RELEASING.md](RELEASING.md) for the release pipeline and policy keys.
+
 ### Tabs
 
 Each open repository is a `RepoSession` (git handle, snapshot, graph rows, selection, undo journal, ref filters, LFS state, refresh bookkeeping). `RepoWorkspace` holds the list and the active session and exposes the active session's state through the same properties components already bind to. File-system events for background tabs are recorded as stale change kinds and applied when the tab is activated. Open tabs and the active tab are persisted in settings and restored on launch; a command-line path opens (or switches to) its own tab.
@@ -227,7 +234,8 @@ Each open repository is a `RepoSession` (git handle, snapshot, graph rows, selec
 
 ## 4. Security posture
 
-- **No telemetry, no cloud dependency.** Network traffic is limited to the user's Git remotes and the hosting APIs they configure. Works fully offline or air-gapped.
+- **No telemetry, no cloud dependency.** Network traffic is limited to the user's Git remotes, the hosting APIs they configure, and the update check, which requests only the feed's release index (sending the app version and platform) and can be turned off or pointed at an internal share by setting or machine policy. Works fully offline or air-gapped.
+- **Updates.** Feeds must be https (http only for loopback) or a local or UNC path. Packages are installed only after their SHA-256 matches the release index and the user approves. The release workflow pins third-party actions to commit SHAs, signs binaries and installers when a certificate is configured, and publishes checksums and a build provenance attestation.
 - **Secrets.** Hosting tokens are validated, then stored only in the OS keyring (Windows Credential Manager, DPAPI-protected, local-machine persistence, never roamed). Settings JSON contains no secrets. Plaintext buffers are cleared after keyring writes. Platforms without a keyring refuse to store tokens rather than fall back to plaintext.
 - **HTTPS by default** for hosting APIs. Cloud providers are fixed to HTTPS. A self-hosted account may be configured with an `http://` URL after an explicit warning and confirmation (the token then travels unencrypted); it is tagged **HTTP** in the UI. Per-request policy (`HostingDefaults.IsRequestAllowed`) permits plain HTTP only for such accounts and only to the configured host and port, so HTTPS accounts are never downgraded and pagination links cannot redirect a token to another host. Schemes other than `http`/`https` are rejected.
 - **Git authentication** is delegated to the user's Git configuration (Git Credential Manager, SSH agent, proxies, custom CA settings), so existing enterprise controls apply unchanged.
@@ -239,6 +247,6 @@ Each open repository is a `RepoSession` (git handle, snapshot, graph rows, selec
 ## 5. Requirements and tested baseline
 
 - Windows 10 version 1809 (build 17763) or later, or Windows 11, x64, with the WebView2 runtime (built into Windows 11). The desktop host targets `net10.0-windows10.0.17763.0` because the WebView2 SDK's WPF assembly references the Windows SDK projection (`Microsoft.Windows.SDK.NET`).
-- .NET 10 SDK to build; .NET 10 runtime to run.
+- .NET 10 SDK to build. Releases are self-contained (no runtime to install); running from source needs the .NET 10 runtime.
 - Git for Windows 2.39 or later on `PATH` (tested with 2.52). GitForge warns in the status bar when Git is missing or too old.
-- Key packages: MudBlazor 9.14.0, LibGit2Sharp 0.32.0, TextMateSharp 2.0.5 (+ Grammars), Microsoft.AspNetCore.Components.WebView.Wpf 10.0.130, xunit.v3 4.0.3. Git LFS features need git-lfs 3.x (bundled with Git for Windows; tested with 3.7.1).
+- Key packages: MudBlazor 9.14.0, LibGit2Sharp 0.32.0, TextMateSharp 2.0.5 (+ Grammars), Microsoft.AspNetCore.Components.WebView.Wpf 10.0.130, Velopack 1.2.161 (and the matching vpk tool), xunit.v3 4.0.3. Git LFS features need git-lfs 3.x (bundled with Git for Windows; tested with 3.7.1).

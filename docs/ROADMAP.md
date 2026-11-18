@@ -65,9 +65,10 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 ## Phase 4 — Hardening and V1.0 release (target: +4 weeks)
 
 - ⬜ Cross-platform hosts (Photino.Blazor or .NET MAUI) and macOS Keychain backend.
-- ⬜ Installers: MSIX and WiX MSI with Authenticode signing; offline-capable update channel.
+- ✅ Installers and updates: Velopack Setup.exe (per user) and MSI built by a tag-triggered release workflow; Authenticode signing when a certificate secret is configured; daily update checks with delta downloads, SHA-256 verification, and user-approved restart; GitHub, https-mirror, or folder/UNC feeds; machine policy to pin the feed or turn updates off ([RELEASING.md](RELEASING.md)).
+- ⬜ MSIX package.
 - ⬜ Accessibility audit to Section 508 / WCAG 2.1 AA (keyboard paths, screen-reader names, contrast).
-- ⬜ Supply chain: CycloneDX SBOM per build, dependency vulnerability scanning, reproducible builds.
+- 🟡 Supply chain: release assets get SHA-256 checksums and a GitHub build provenance attestation, and workflow actions are pinned to commit SHAs. Open: CycloneDX SBOM per build, dependency vulnerability scanning, reproducible builds.
 - ⬜ Security review and penetration test of process execution, IPC, and token handling.
 - ⬜ Telemetry-free diagnostics: local, user-exportable logs only.
 

@@ -11,13 +11,22 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Explorer, taskbar, and Alt+Tab icon. Regenerate from assets/brand/gitforge-logo.png (16-256 px). -->
     <ApplicationIcon>Assets\GitForge.ico</ApplicationIcon>
+    <!-- Program.Main runs Velopack's install/update hooks before WPF starts. -->
+    <StartupObject>GitForge.Desktop.Program</StartupObject>
+    <!-- Where installed copies look for updates: a GitHub repository, an https feed, or a folder / UNC share.
+         Build with -p:GitForgeUpdateFeed=... to ship a copy that updates from an internal mirror. -->
+    <GitForgeUpdateFeed Condition="'$(GitForgeUpdateFeed)' == ''">$(RepositoryUrl)</GitForgeUpdateFeed>
   </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="GitForgeUpdateFeed" Value="$(GitForgeUpdateFeed)" />
+  </ItemGroup>
   <ItemGroup>
     <Resource Include="Assets\GitForge.ico" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
+    <PackageReference Include="Velopack" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\GitForge.UI\GitForge.UI.csproj" />

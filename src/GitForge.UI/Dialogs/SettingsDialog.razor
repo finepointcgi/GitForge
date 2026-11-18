@@ -1,6 +1,7 @@
 @inject ISettingsStore SettingsStore
 @inject RepoWorkspace W
 @inject IDialogService Dialogs
+@inject UpdateService Updates
 
 <MudDialog>
     <DialogContent>
@@ -33,6 +34,34 @@
         </div>
         <p class="gf-dim gf-small">Automatic submodule updates only touch submodules whose recorded commit changed (or that are new), and never overwrite a submodule with local changes. Uninitialized submodules are initialized when a repository opens.</p>
         <p class="gf-dim gf-small">Merge tools use your git configuration (mergetool.&lt;tool&gt;.cmd). Changing the git path takes effect after restart.</p>
+
+        <div class="gf-settings-section">
+            <div class="gf-dialog-row">
+                <strong>Updates</strong>
+                <span class="gf-dim">GitForge @Updates.CurrentVersion</span>
+                <span class="gf-spacer"></span>
+                <button type="button" class="gf-link-button" @onclick="CheckNowAsync">Check now…</button>
+            </div>
+            <MudCheckBox T="bool" @bind-Value="_s.CheckForUpdates" Label="Check for updates once a day" Size="Size.Small" Dense="true" Disabled="@(!Updates.CanUpdate)" />
+            <MudTextField T="string" @bind-Value="_s.UpdateFeed" Label="Update feed (empty = GitHub releases)" Placeholder="https://updates.example.com/gitforge or \\server\share\gitforge"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="@(Updates.Policy.Feed is not null || !Updates.CanUpdate)"
+                          Error="@(_feedError is not null)" ErrorText="@_feedError" />
+            <p class="gf-dim gf-small">
+                @if (Updates.UnavailableReason is null && Updates.TryGetFeed(out var currentFeed, out _))
+                {
+                    <text>Updates come from @currentFeed.Describe(). </text>
+                }
+                @if (Updates.Policy.IsManaged)
+                {
+                    <text>Your organization manages @(Updates.Policy.Disabled ? "updates (turned off)" : $"the update feed ({Updates.Policy.Feed})"). </text>
+                }
+                @if (Updates.UnavailableReason is { } reason)
+                {
+                    <text>@reason </text>
+                }
+                The check reads the feed's release list and sends only GitForge's version and platform, nothing about you or your repositories. Updates install only when you choose.
+            </p>
+        </div>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
@@ -54,9 +83,12 @@
         public int AutoFetchMinutes { get; set; }
         public string? GitExecutablePath { get; set; }
         public string? ExternalMergeTool { get; set; }
+        public bool CheckForUpdates { get; set; }
+        public string? UpdateFeed { get; set; }
     }
 
     private Model _s = new();
+    private string? _feedError;
 
     protected override void OnInitialized()
     {
@@ -66,6 +98,7 @@
             Theme = c.Theme, AccentColor = c.AccentColor, VimNavigation = c.VimNavigation, FetchOnOpen = c.FetchOnOpen,
             AutoUpdateSubmodules = c.AutoUpdateSubmodules, SyntaxHighlighting = c.SyntaxHighlighting,
             AutoFetchMinutes = c.AutoFetchMinutes, GitExecutablePath = c.GitExecutablePath, ExternalMergeTool = c.ExternalMergeTool,
+            CheckForUpdates = c.CheckForUpdates, UpdateFeed = c.UpdateFeed,
         };
     }
 
@@ -75,9 +108,18 @@
         await dialog.Result;
     }
 
+    private async Task CheckNowAsync()
+    {
+        var dialog = await Dialogs.ShowAsync<UpdateDialog>("Updates", new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true });
+        await dialog.Result;
+    }
+
     private async Task Save()
     {
         var m = _s;
+        var feed = string.IsNullOrWhiteSpace(m.UpdateFeed) ? null : m.UpdateFeed.Trim();
+        _feedError = null;
+        if (feed is not null && !UpdateFeed.TryParse(feed, string.Empty, out _, out _feedError)) return;
         await SettingsStore.UpdateAsync(c => c with
         {
             Theme = m.Theme, AccentColor = m.AccentColor, VimNavigation = m.VimNavigation, FetchOnOpen = m.FetchOnOpen,
@@ -85,6 +127,8 @@
             AutoFetchMinutes = Math.Clamp(m.AutoFetchMinutes, 0, 240),
             GitExecutablePath = string.IsNullOrWhiteSpace(m.GitExecutablePath) ? null : m.GitExecutablePath.Trim(),
             ExternalMergeTool = string.IsNullOrWhiteSpace(m.ExternalMergeTool) ? null : m.ExternalMergeTool.Trim(),
+            CheckForUpdates = m.CheckForUpdates,
+            UpdateFeed = feed,
         });
         Dialog.Close();
     }

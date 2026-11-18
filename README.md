@@ -20,15 +20,22 @@ A fast, keyboard-first Git client for Windows, built with C#/.NET 10, Blazor, an
 - **Advanced Git:** visual interactive rebase, reflog recovery, conflict tools, submodules.
 - **Multi-account hosting:** tokens in Windows Credential Manager, repository browser, pull request list.
 - **Forest-green dark theme** matching the GitForge icon. The accent color defaults to GitForge green (a darker green in light mode, for contrast) and can be changed in **Settings**.
-- **Secure by default:** no telemetry, HTTPS APIs by default (plain HTTP only for self-hosted servers you explicitly configure that way), no plaintext secrets on disk, hooks and signing honored.
+- **Automatic updates:** installed copies check once a day and show **Update to x.y.z** in the status bar; updating downloads a small delta, verifies it, and restarts with your tabs. IT can pin the update source (including an offline share) or turn updates off by policy.
+- **Secure by default:** no telemetry (the update check sends only the app version and platform), HTTPS APIs by default (plain HTTP only for self-hosted servers you explicitly configure that way), no plaintext secrets on disk, hooks and signing honored.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and data models, and [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and data models, [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan, and [docs/RELEASING.md](docs/RELEASING.md) for releases, code signing, and update policy.
+
+## Install
+
+Download `GitForge-win-Setup.exe` from [Releases](https://github.com/finepointcgi/GitForge/releases) and run it. It installs for the current user (no administrator rights) and adds GitForge to the Start menu. Releases are self-contained, so no .NET runtime is needed. For deployment tools, use `GitForge-win.msi`; to check a download, compare it with `SHA256SUMS.txt` on the same release.
+
+GitForge updates itself. **Settings › Updates** shows the version, turns the daily check off, or points to another update feed (an https mirror or a folder / UNC share for disconnected networks). **Check for updates…** in the command palette checks immediately.
 
 ## Requirements
 
 - Windows 10 version 1809 or later, or Windows 11 (x64), with the WebView2 runtime
-- .NET 10 SDK
 - Git for Windows 2.39 or later on `PATH` (Git Credential Manager recommended for HTTPS remotes)
+- .NET 10 SDK, to build from source
 
 ## Build, test, run
 
@@ -110,3 +117,7 @@ Open **Accounts** in the toolbar, choose a provider, and paste a personal access
 Self-hosted base URLs may be `https://` or `http://`. Cloud providers always use HTTPS. An `http://` URL triggers a warning and a confirmation, because the token then travels unencrypted; such accounts are tagged **HTTP** in the list. GitForge sends plain HTTP only to that account's own host and port, and never downgrades an HTTPS account.
 
 Git operations (fetch, pull, push, clone) use your normal Git credential setup, not these tokens.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

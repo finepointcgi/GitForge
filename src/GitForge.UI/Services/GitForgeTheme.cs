@@ -111,7 +111,7 @@ public static class GitForgeTheme
 
 public static class UiServiceCollectionExtensions
 {
-    /// <summary>Registers every GitForge service a host needs. Hosts may override <see cref="IPlatformShell"/>.</summary>
+    /// <summary>Registers every GitForge service a host needs. Hosts may override <see cref="IPlatformShell"/> and <see cref="IAppUpdater"/>.</summary>
     public static IServiceCollection AddGitForge(this IServiceCollection services)
     {
         services.AddMudServices(c =>
@@ -126,6 +126,8 @@ public static class UiServiceCollectionExtensions
         services.AddScoped<RepoWorkspace>();
         services.AddScoped<ShortcutService>();
         services.AddSingleton<IPlatformShell, DefaultPlatformShell>();
+        services.AddSingleton<IAppUpdater, NoAppUpdater>(); // the desktop app replaces this with Velopack
+        services.AddScoped<UpdateService>();
         services.AddSingleton(new StartupOptions(null));
         services.AddSingleton<SyntaxHighlighter>();
         return services;

@@ -30,6 +30,7 @@ public static class Keymap
         new("settings.open", "General", "Settings", []),
         new("accounts.open", "General", "Hosting accounts", []),
         new("theme.toggle", "General", "Toggle light and dark theme", []),
+        new("app.update", "General", "Check for updates", []),
 
         new("view.status", "Views", "Select WIP (stage and commit)", ["Ctrl+1"]),
         new("view.history", "Views", "Commit graph", ["Ctrl+2"]),

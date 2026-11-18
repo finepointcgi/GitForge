@@ -5,6 +5,8 @@
 @inject ISettingsStore SettingsStore
 @inject IGitCli Cli
 @inject StartupOptions Startup
+@inject UpdateService Updates
+@inject ISnackbar Snackbar
 
 <MudThemeProvider @ref="_themeProvider" Theme="_theme" IsDarkMode="_dark" />
 <MudPopoverProvider />
@@ -103,6 +105,13 @@
             }
         }
         <span class="gf-spacer"></span>
+        @if (Updates.Available is { } update && Updates.CanUpdate)
+        {
+            <button class="gf-status-update" title="GitForge @update.Version is available (you have @Updates.CurrentVersion)" @onclick="ShowUpdates">
+                <MudIcon Icon="@Icons.Material.Outlined.SystemUpdateAlt" Style="font-size: 14px;" />
+                @(Updates.Status == UpdateStatus.Downloading ? $"Downloading {update.Version}… {Updates.Progress}%" : $"Update to {update.Version}")
+            </button>
+        }
         @if (W.Undo.CanUndo && !W.IsBusy)
         {
             <span class="gf-dim">@Keymap.UndoName(W.Settings): undo @W.Undo.UndoDescription</span>
@@ -122,6 +131,8 @@
     {
         StartupTrace.Mark("blazor: app initializing");
         W.Changed += OnChanged;
+        Updates.Changed += OnChanged;
+        Updates.UpdateFound += OnUpdateFound;
         Shortcuts.Command += OnCommand;
         await W.InitializeAsync();
         _theme = GitForgeTheme.Create(W.Settings.AccentColor);
@@ -147,7 +158,18 @@
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         await W.RestoreTabsAsync(Startup.OpenPath);
         StartupTrace.Step("tabs restored", started);
+        Updates.StartAutomaticChecks();
     }
+
+    private void OnUpdateFound(AppUpdate update) => _ = InvokeAsync(() =>
+        Snackbar.Add($"GitForge {update.Version} is available.", Severity.Info, o =>
+        {
+            o.Action = "Details";
+            o.ActionColor = Color.Primary;
+            o.OnClick = _ => ShowUpdates();
+        }));
+
+    private Task ShowUpdates() => Show<UpdateDialog>("Updates");
 
     private async Task ApplyThemePreferenceAsync()
     {
@@ -233,6 +255,7 @@
             case "settings.open": await Show<SettingsDialog>("Settings"); break;
             case "theme.toggle": await ToggleTheme(); break;
             case "help.shortcuts": await Show<ShortcutsDialog>("Keyboard shortcuts", MaxWidth.Medium); break;
+            case "app.update": await ShowUpdates(); break;
         }
     }
 
@@ -259,6 +282,8 @@
     public async ValueTask DisposeAsync()
     {
         W.Changed -= OnChanged;
+        Updates.Changed -= OnChanged;
+        Updates.UpdateFound -= OnUpdateFound;
         Shortcuts.Command -= OnCommand;
         SettingsStore.Changed -= OnSettingsChanged;
         await Shortcuts.DisposeAsync();

@@ -1,0 +1,120 @@
+@implements IDisposable
+@inject UpdateService Updates
+@inject RepoWorkspace W
+
+<MudDialog>
+    <DialogContent>
+        <div class="gf-update">
+            @if (Updates.UnavailableReason is { } reason)
+            {
+                <p>GitForge @Updates.CurrentVersion</p>
+                <p class="gf-dim">@reason</p>
+            }
+            else if (Updates.Policy.Disabled)
+            {
+                <p>GitForge @Updates.CurrentVersion</p>
+                <p class="gf-dim">Your organization turned off updates for GitForge. Ask IT for newer versions.</p>
+            }
+            else
+            {
+                @switch (Updates.Status)
+                {
+                    case UpdateStatus.Checking:
+                        <p>Checking @(_feed?.Describe() ?? "for updates")…</p>
+                        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Size="Size.Small" />
+                        break;
+
+                    case UpdateStatus.Available or UpdateStatus.Downloading when Updates.Available is { } u:
+                        <p><strong>GitForge @u.Version is available.</strong> <span class="gf-dim">You have @Updates.CurrentVersion.</span></p>
+                        @if (!string.IsNullOrWhiteSpace(u.Notes))
+                        {
+                            <div class="gf-update-notes">@u.Notes.Trim()</div>
+                        }
+                        @if (Updates.Status == UpdateStatus.Downloading)
+                        {
+                            <p class="gf-dim gf-small">Downloading… @Updates.Progress%. GitForge restarts when it's done.</p>
+                            <MudProgressLinear Value="Updates.Progress" Color="Color.Primary" Size="Size.Small" />
+                        }
+                        else if (W.IsBusy)
+                        {
+                            <p class="gf-dim gf-small">Wait for “@W.BusyText” to finish before restarting.</p>
+                        }
+                        else
+                        {
+                            <p class="gf-dim gf-small">Updating restarts GitForge and reopens your tabs.</p>
+                        }
+                        break;
+
+                    case UpdateStatus.UpToDate:
+                        <p>GitForge @Updates.CurrentVersion is the latest version.</p>
+                        break;
+
+                    case UpdateStatus.Failed:
+                        <p>GitForge @Updates.CurrentVersion</p>
+                        <p class="gf-update-error">@Updates.Error</p>
+                        break;
+                }
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        @if (Updates.Status is UpdateStatus.Available or UpdateStatus.Downloading && Updates.CanUpdate)
+        {
+            <MudButton Disabled="@(Updates.Status == UpdateStatus.Downloading)" OnClick="@(() => Dialog.Close())">Later</MudButton>
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(Updates.Status == UpdateStatus.Downloading || W.IsBusy)" OnClick="InstallAsync">Update and restart</MudButton>
+        }
+        else
+        {
+            @if (Updates.Status == UpdateStatus.Failed && Updates.CanUpdate)
+            {
+                <MudButton OnClick="@(() => Retry())">Try again</MudButton>
+            }
+            <MudButton Color="Color.Primary" OnClick="@(() => Dialog.Close())">Close</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    private UpdateFeed? _feed;
+
+    protected override void OnInitialized()
+    {
+        Updates.Changed += OnChanged;
+        W.Changed += OnChanged;
+        Updates.TryGetFeed(out _feed, out _);
+
+        // Show a known update (or its failed download) as is; installing always waits for the user's click.
+        if (Updates.CanUpdate && Updates.Available is null && Updates.Status != UpdateStatus.Checking)
+        {
+            _ = Updates.CheckAsync();
+        }
+    }
+
+    /// <summary>"Try again": repeats the failed download if an update is known, otherwise the failed check.</summary>
+    private void Retry()
+    {
+        if (Updates.Available is not null)
+        {
+            _ = InstallAsync();
+            return;
+        }
+
+        _ = Updates.CheckAsync();
+    }
+
+    private async Task InstallAsync()
+    {
+        if (W.IsBusy) return;
+        await Updates.InstallAsync(); // on success the process exits and the new version starts
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Updates.Changed -= OnChanged;
+        W.Changed -= OnChanged;
+    }
+}

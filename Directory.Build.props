@@ -9,8 +9,11 @@
     <Deterministic>true</Deterministic>
     <Company>GitForge Contributors</Company>
     <Product>GitForge</Product>
+    <!-- Release builds take the version from the git tag (vX.Y.Z); see .github/workflows/release.yml. -->
     <Version>0.1.0</Version>
-    <!-- No telemetry, no phoning home: safe for disconnected / CUI environments. -->
+    <RepositoryUrl>https://github.com/finepointcgi/GitForge</RepositoryUrl>
+    <!-- No telemetry. The only request GitForge makes on its own is the daily update check, which sends no
+         identifiers and can be turned off in Settings or by policy: safe for disconnected / CUI environments. -->
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 </Project>

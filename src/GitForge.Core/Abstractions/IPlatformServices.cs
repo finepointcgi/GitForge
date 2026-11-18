@@ -53,6 +53,15 @@ public sealed record AppSettings
     /// </summary>
     public IReadOnlyDictionary<string, IReadOnlyList<string>> KeyBindings { get; init; } = new Dictionary<string, IReadOnlyList<string>>();
 
+    /// <summary>Look for a new GitForge release once a day (installed copies only; machine policy can turn this off).</summary>
+    public bool CheckForUpdates { get; init; } = true;
+
+    /// <summary>Custom update feed: an https URL or a folder / UNC share with GitForge releases. Null = GitHub releases.</summary>
+    public string? UpdateFeed { get; init; }
+
+    /// <summary>When the last automatic update check finished without finding an update (checks run at most daily).</summary>
+    public DateTimeOffset? LastUpdateCheck { get; init; }
+
     public IReadOnlyList<string> RecentRepositories { get; init; } = [];
 
     /// <summary>Repository tabs open at the end of the last session (restored on launch).</summary>

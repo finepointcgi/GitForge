@@ -20,6 +20,7 @@ public partial class MainWindow : Window
 #endif
         services.AddGitForge();
         services.AddSingleton<IPlatformShell, WpfPlatformShell>(); // native folder picker overrides the default
+        services.AddSingleton<IAppUpdater, VelopackUpdater>();
         var args = Environment.GetCommandLineArgs();
         services.AddSingleton(new StartupOptions(args.Length > 1 ? args[1] : null)); // GitForge.exe <repo-path>
 
