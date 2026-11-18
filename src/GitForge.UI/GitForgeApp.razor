@@ -68,7 +68,7 @@
         </main>
         @if (W.Repo is not null)
         {
-            <div class="gf-splitter gf-splitter-x" data-var="--gf-right-w" data-target="gf-body" data-invert="1" data-min="300" data-max="720"></div>
+            <div class="gf-splitter gf-splitter-x" data-var="--gf-right-w" data-target="gf-body" data-invert="1" data-min="300" data-max="2400" data-max-ratio="0.6"></div>
             <aside class="gf-right">
                 <CommitPanel />
             </aside>
@@ -243,6 +243,7 @@
             case "remote.pull": await W.PullAsync(); break;
             case "remote.push": await W.PushAsync(); break;
             case "branch.new" when hasRepo: await Show<NewBranchDialog>("New branch"); break;
+            case "branch.cleanup" when hasRepo: await CleanUpBranchesAsync(); break;
             case "stash.save" when hasRepo: await Show<StashDialog>("Stash changes"); break;
             case "stash.pop" when hasRepo: await W.PopStashAsync(); break;
             case "console.toggle" when hasRepo:
@@ -256,6 +257,26 @@
             case "theme.toggle": await ToggleTheme(); break;
             case "help.shortcuts": await Show<ShortcutsDialog>("Keyboard shortcuts", MaxWidth.Medium); break;
             case "app.update": await ShowUpdates(); break;
+        }
+    }
+
+    /// <summary>Offers to delete local branches whose upstream was deleted on the remote; only fully merged ones are removed.</summary>
+    private async Task CleanUpBranchesAsync()
+    {
+        var names = W.GoneBranches.Select(b => b.Name).ToList();
+        if (names.Count == 0)
+        {
+            W.Info("No local branches to clean up. None of their copies on the remote were deleted.");
+            return;
+        }
+
+        var list = string.Join(", ", names.Take(15)) + (names.Count > 15 ? $", and {names.Count - 15} more" : string.Empty);
+        var message = $"Their copies on the remote were deleted: {list}. " +
+                      $"GitForge deletes only branches whose commits are already in {W.CurrentBranch ?? "HEAD"}, so no work is lost. " +
+                      "Branches with other commits (common after squash merges) are kept for you to review.";
+        if (await Dialogs.ShowMessageBoxAsync("Clean up branches", message, yesText: "Delete merged", cancelText: "Cancel") == true)
+        {
+            await W.CleanUpGoneBranchesAsync(names);
         }
     }
 

@@ -66,6 +66,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
     private readonly UndoManager _noUndo = new();
     private readonly List<string> _noConsole = [];
     private readonly HashSet<string> _noRefs = [];
+    private readonly Dictionary<string, bool> _noFolders = [];
     private RepoSession? _active;
 
     public RepoWorkspace(IGitRepositoryFactory factory, ISettingsStore settings, IAccountService accounts, GitEngineOptions engine, ISnackbar snackbar, ILogger<RepoWorkspace> log)
@@ -103,6 +104,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
     public DiffTarget? OpenDiff => _active?.OpenDiff;
     public FileViewTarget? OpenFileView => _active?.OpenFileView;
     public HashSet<string> HiddenRefs => _active?.HiddenRefs ?? _noRefs;
+    public Dictionary<string, bool> SidebarFolders => _active?.SidebarFolders ?? _noFolders;
     public string? SoloRef => _active?.SoloRef;
     public bool IsFilteringRefs => SoloRef is not null || HiddenRefs.Count > 0;
 
@@ -136,6 +138,10 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
     public string? CurrentBranch => Snapshot?.HeadBranch;
 
     public BranchHead? CurrentBranchHead => Snapshot?.LocalBranches.FirstOrDefault(b => b.IsCurrent);
+
+    /// <summary>Local branches (other than the current one) whose upstream was deleted on the remote; candidates for clean-up.</summary>
+    public IReadOnlyList<BranchHead> GoneBranches =>
+        Snapshot?.LocalBranches.Where(b => b.IsUpstreamGone && !b.IsCurrent).ToList() ?? [];
 
     public RemoteInfo? DefaultRemote =>
         Snapshot?.Remotes.FirstOrDefault(r => r.Name == CurrentBranchHead?.RemoteName)

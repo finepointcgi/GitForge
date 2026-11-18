@@ -97,11 +97,11 @@ dotnet run --project src/GitForge.DevHost
 
 These are the defaults; every shortcut can be changed or removed (press **?**). Single-key shortcuts work outside text fields while vim-style navigation is on in **Settings**.
 
-Click a branch to jump to its commit; double-click to check it out; drag it onto another branch to merge or rebase. Hover a branch to hide it from the graph, or right-click to solo it. Click a stash to preview it. Right-click branches, tags, stashes, and commits for more actions.
+Branch folders (feature/, fix/, chore/ …) start collapsed, except the one holding the current branch; the filter at the top of the sidebar stays in view and opens every folder with a match. Click a branch to jump to its commit; double-click to check it out; drag it onto another branch to merge or rebase. Hover a branch to hide it from the graph, or right-click to solo it. Click a stash to preview it. Right-click branches, tags, stashes, and commits for more actions.
 
-Drag the borders in the graph header to resize columns; double-click a border, or right-click the header and choose **Reset column widths**, to restore defaults. Widths are remembered.
+Drag the borders in the graph header to resize columns; double-click a border, or right-click the header and choose **Reset column widths**, to restore defaults. Widths are remembered. To put the graph left of the branch labels (Sourcetree's order), right-click the header and choose **Graph before Branch / Tag**.
 
-A **remote deleted** label means the branch's copy on the remote was deleted (usually after its pull request merged) and a fetch removed it. Local commits are untouched. Right-click to push it again, stop tracking, or delete it; **Clean up…** at the top of the Local list deletes only branches whose commits are already in the current branch.
+A **remote deleted** label means the branch's copy on the remote was deleted (usually after its pull request merged) and a fetch removed it. Local commits are untouched. Right-click to push it again, stop tracking, or delete it. **Clean up** in the toolbar (its badge counts these branches), or the note at the top of the Local list, deletes only those whose commits are already in the current branch.
 
 ## Hosting accounts
 

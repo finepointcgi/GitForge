@@ -47,6 +47,7 @@ public static class Keymap
         new("remote.push", "Remotes", "Push", ["Ctrl+Shift+P"]),
 
         new("branch.new", "Branches and commits", "New branch", ["Ctrl+B"]),
+        new("branch.cleanup", "Branches and commits", "Clean up branches deleted on the remote", []),
         new("commit.submit", "Branches and commits", "Commit staged changes", ["Ctrl+Enter"]),
         new("stash.save", "Branches and commits", "Stash changes", ["Ctrl+Shift+S"]),
         new("stash.pop", "Branches and commits", "Pop the latest stash", []),

@@ -70,6 +70,7 @@
                 new("Push", "Remote", Icons.Material.Outlined.Upload, K("remote.push"), Cmd("remote.push")),
                 new("Push (force with lease)", "Remote", Icons.Material.Outlined.Upload, null, () => W.PushAsync(force: true)),
                 new("New branch…", "Branch", Icons.Material.Outlined.CallSplit, K("branch.new"), Cmd("branch.new")),
+                new("Clean up branches deleted on the remote…", "Branch", Icons.Material.Outlined.CleaningServices, K("branch.cleanup"), Cmd("branch.cleanup")),
                 new("Stash changes…", "Stash", Icons.Material.Outlined.Inventory2, K("stash.save"), Cmd("stash.save")),
                 new("Pop latest stash", "Stash", Icons.Material.Outlined.Unarchive, K("stash.pop"), W.PopStashAsync),
                 new("Update submodules (recursive)", "Submodules", Icons.Material.Outlined.Extension, null, W.UpdateSubmodulesAsync),

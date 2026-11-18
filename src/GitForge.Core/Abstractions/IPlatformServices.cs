@@ -45,6 +45,9 @@ public sealed record AppSettings
     public bool ShowAuthorColumn { get; init; } = true;
     public bool ShowDateColumn { get; init; } = true;
     public bool ShowShaColumn { get; init; }
+
+    /// <summary>Graph column left of the Branch / Tag column (Sourcetree's order) instead of right of it.</summary>
+    public bool GraphBeforeRefs { get; init; }
     public bool IgnoreWhitespace { get; init; }
 
     /// <summary>

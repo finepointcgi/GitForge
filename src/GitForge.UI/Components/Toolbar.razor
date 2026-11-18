@@ -78,6 +78,10 @@
         <ToolbarButton Icon="@Icons.Material.Outlined.Upload" Label="Push" Hint="@($"Push{Keymap.Hint(W.Settings, "remote.push")}")" Disabled="@NoRepo" Badge="@(W.CurrentBranchHead?.Ahead ?? 0)" OnClick="@(() => Shortcuts.RaiseAsync("remote.push"))" />
         <span class="gf-toolbar-sep"></span>
         <ToolbarButton Icon="@Icons.Material.Outlined.CallSplit" Label="Branch" Hint="@($"New branch{Keymap.Hint(W.Settings, "branch.new")}")" Disabled="@NoRepo" OnClick="@(() => Shortcuts.RaiseAsync("branch.new"))" />
+        @{ var gone = W.GoneBranches.Count; }
+        <ToolbarButton Icon="@Icons.Material.Outlined.CleaningServices" Label="Clean up" Badge="@gone" Disabled="@(NoRepo || gone == 0 || W.IsBusy)"
+                       Hint="@(gone == 0 ? "Clean up branches: none were deleted on the remote" : $"Clean up {gone} local branch{(gone == 1 ? string.Empty : "es")} deleted on the remote{Keymap.Hint(W.Settings, "branch.cleanup")}")"
+                       OnClick="@(() => Shortcuts.RaiseAsync("branch.cleanup"))" />
         <ToolbarButton Icon="@Icons.Material.Outlined.Inventory2" Label="Stash" Hint="@($"Stash changes{Keymap.Hint(W.Settings, "stash.save")}")" Disabled="@(NoRepo || !W.HasWip)" OnClick="@(() => Shortcuts.RaiseAsync("stash.save"))" />
         <ToolbarButton Icon="@Icons.Material.Outlined.Unarchive" Label="Pop" Hint="Pop the latest stash" Disabled="@(NoRepo || W.Snapshot?.Stashes.Count is null or 0)" OnClick="@(() => Shortcuts.RaiseAsync("stash.pop"))" />
         <span class="gf-toolbar-sep"></span>

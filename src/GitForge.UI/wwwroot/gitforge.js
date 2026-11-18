@@ -66,7 +66,8 @@
     keyHandler = null;
   }
 
-  // Splitters: <div class="gf-splitter" data-var="--x" data-target="elementId" data-min data-max data-invert>
+  // Splitters: <div class="gf-splitter" data-var="--x" data-target="elementId" data-min data-max data-max-ratio data-invert>
+  // data-max-ratio caps the size at that fraction of the target (gitforge.css applies the same cap when the window shrinks).
   let splittersReady = false;
   function initSplitters() {
     if (splittersReady) return;
@@ -81,6 +82,7 @@
       const invert = s.dataset.invert === "1";
       const min = parseInt(s.dataset.min || "100", 10);
       const max = parseInt(s.dataset.max || "2000", 10);
+      const maxRatio = parseFloat(s.dataset.maxRatio || "0");
       try { s.setPointerCapture(e.pointerId); } catch (_) { }
       s.classList.add("dragging");
 
@@ -89,7 +91,9 @@
         let size = horizontal
           ? (invert ? r.right - ev.clientX : ev.clientX - r.left)
           : (invert ? r.bottom - ev.clientY : ev.clientY - r.top);
-        size = Math.max(min, Math.min(max, size));
+        const extent = horizontal ? r.width : r.height;
+        const cap = maxRatio > 0 ? Math.min(max, extent * maxRatio) : max;
+        size = Math.round(Math.max(min, Math.min(cap, size)));
         target.style.setProperty(s.dataset.var, size + "px");
       }
       function up() {

@@ -49,6 +49,9 @@ public sealed class RepoSession : IAsyncDisposable
     public HashSet<string> HiddenRefs { get; } = new(StringComparer.Ordinal);
     public string? SoloRef { get; internal set; }
 
+    /// <summary>Sidebar folders the user opened or closed in this tab; folders not listed use their default.</summary>
+    public Dictionary<string, bool> SidebarFolders { get; } = new(StringComparer.Ordinal);
+
     // Refresh bookkeeping.
     internal CancellationTokenSource? HistoryCts { get; set; }
     internal CancellationTokenSource? AutoFetchCts { get; set; }

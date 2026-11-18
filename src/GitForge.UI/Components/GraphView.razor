@@ -7,7 +7,7 @@
 @* Column widths live as CSS variables on this host element (set by the header resizers and persisted by gitforge.js);
    it has no Blazor-managed style attribute, so re-renders never wipe a width the user dragged. *@
 <div class="gf-graph-host" id="gf-graph">
-<div class="gf-graphview" style="--gf-cols:@Columns">
+<div class="gf-graphview @(GraphFirst ? "graph-first" : null)" style="--gf-cols:@Columns">
     <div class="gf-graph-toolbar">
         <MudTooltip Text="@($"Go to the current branch{Keymap.Hint(W.Settings, "graph.head")}")">
             <button class="gf-icon-plain" aria-label="Go to the current branch" @onclick="W.GoToHead">
@@ -42,6 +42,8 @@
                 <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("author"))">@(W.Settings.ShowAuthorColumn ? "✓ " : "   ")Author</MudMenuItem>
                 <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("date"))">@(W.Settings.ShowDateColumn ? "✓ " : "   ")Date / time</MudMenuItem>
                 <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("sha"))">@(W.Settings.ShowShaColumn ? "✓ " : "   ")SHA</MudMenuItem>
+                <MudDivider />
+                <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("order"))">@(GraphFirst ? "✓ " : "   ")Graph before Branch / Tag</MudMenuItem>
             </ChildContent>
         </MudMenu>
     </div>
@@ -51,8 +53,16 @@
     <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true" Class="gf-graph-head-menu">
         <ActivatorContent Context="menu">
             <div class="gf-graph-head gf-graph-grid" title="Drag a column border to resize · double-click it to reset · right-click for columns" @oncontextmenu="@(e => menu.OpenAsync(e))">
-                <span class="gf-col-ref gf-head-cell">Branch / Tag<span class="gf-col-resize right" data-var="--gf-col-ref" data-target="gf-graph" data-dir="right" data-min="60" data-max="600"></span></span>
-                <span class="gf-head-cell">Graph<span class="gf-col-resize right" data-var="--gf-col-graph" data-target="gf-graph" data-dir="right" data-min="30" data-max="800"></span></span>
+                @if (GraphFirst)
+                {
+                    @GraphHead
+                    @RefHead
+                }
+                else
+                {
+                    @RefHead
+                    @GraphHead
+                }
                 <span class="gf-head-cell">Commit message</span>
                 @if (W.Settings.ShowAuthorColumn) { <span class="gf-head-cell"><span class="gf-col-resize left" data-var="--gf-col-author" data-target="gf-graph" data-dir="left" data-min="60" data-max="400"></span>Author</span> }
                 @if (W.Settings.ShowDateColumn) { <span class="gf-head-cell"><span class="gf-col-resize left" data-var="--gf-col-date" data-target="gf-graph" data-dir="left" data-min="60" data-max="300"></span>Date</span> }
@@ -64,6 +74,7 @@
             <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("date"))">@(W.Settings.ShowDateColumn ? "✓ " : "   ")Date / time</MudMenuItem>
             <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("sha"))">@(W.Settings.ShowShaColumn ? "✓ " : "   ")SHA</MudMenuItem>
             <MudDivider />
+            <MudMenuItem AutoClose="false" OnClick="@(() => Toggle("order"))">@(GraphFirst ? "✓ " : "   ")Graph before Branch / Tag</MudMenuItem>
             <MudMenuItem OnClick="ResetColumnWidths">Reset column widths</MudMenuItem>
         </ChildContent>
     </MudMenu>
@@ -74,8 +85,9 @@
                 @if (item.IsWip)
                 {
                     <div class="gf-grow-row gf-graph-grid wip @(W.WipSelected ? "selected" : null)" style="--gf-lane:@WipColor" @onclick="@(() => SelectWip(item.Index))">
-                        <span class="gf-col-ref"></span>
+                        @if (!GraphFirst) { <span class="gf-col-ref"></span> }
                         <span class="gf-col-graph"><WipGraphCell Lane="@Math.Max(_wipLane, 0)" Color="@WipColor" LinkDown="@(_wipLane >= 0)" /></span>
+                        @if (GraphFirst) { <span class="gf-col-ref"></span> }
                         <span class="gf-col-msg">
                             <span class="gf-wip-label">// WIP</span>
                             <WipStats Status="W.Status" />
@@ -94,14 +106,21 @@
                             <div class="gf-grow-row gf-graph-grid @(W.IsCommitSelected(c.Sha) ? "selected" : null) @(c.IsMerge ? "merge" : null)"
                                  style="--gf-lane:@Avatars.LaneColor(item.Row.NodeColorIndex)"
                                  @oncontextmenu="@(e => menu.OpenAsync(e))" @onclick="@(e => Click(item.Index, e))" @ondblclick="@(() => CheckoutAt(labels))">
-                                <span class="gf-col-ref"><RefPills Labels="labels" LaneColor="@Avatars.LaneColor(item.Row.NodeColorIndex)" /></span>
+                                @if (!GraphFirst)
+                                {
+                                    <span class="gf-col-ref"><RefPills Labels="labels" LaneColor="@Avatars.LaneColor(item.Row.NodeColorIndex)" /></span>
+                                }
                                 <span class="gf-col-graph">
                                     @if (!Filtered)
                                     {
-                                        <GraphCell Row="item.Row" IsHead="@(c.Sha == W.Snapshot?.HeadSha)" HasRefs="@(labels is { Count: > 0 })"
+                                        <GraphCell Row="item.Row" IsHead="@(c.Sha == W.Snapshot?.HeadSha)" HasRefs="@(labels is { Count: > 0 })" RefsOnRight="GraphFirst"
                                                    WipLane="@WipLaneAt(item.Row)" WipColor="@WipColor" />
                                     }
                                 </span>
+                                @if (GraphFirst)
+                                {
+                                    <span class="gf-col-ref"><RefPills Labels="labels" LaneColor="@Avatars.LaneColor(item.Row.NodeColorIndex)" /></span>
+                                }
                                 <span class="gf-col-msg gf-ellipsis" title="@c.Subject">@c.Subject</span>
                                 @if (W.Settings.ShowAuthorColumn) { <span class="gf-dim gf-ellipsis" title="@c.AuthorEmail">@c.AuthorName</span> }
                                 @if (W.Settings.ShowDateColumn) { <span class="gf-dim gf-nowrap" title="@c.AuthorDate.LocalDateTime.ToString("F", CultureInfo.CurrentCulture)">@Avatars.When(c.AuthorDate)</span> }
@@ -153,9 +172,17 @@
     private int WipLaneAt(GraphRow row) => WipIndex >= 0 && _wipLane >= 0 && row.RowIndex <= _headRow ? _wipLane : -1;
     private int GraphWidth => Filtered ? 36 : (int)Math.Clamp(GraphCell.Geometry.Width(Math.Max(_maxLanes, WipIndex >= 0 ? _wipLane + 1 : 0)) + 10, 40, 420);
 
+    private bool GraphFirst => W.Settings.GraphBeforeRefs;
+
+    private static readonly RenderFragment RefHead = @<span class="gf-col-ref gf-head-cell">Branch / Tag<span class="gf-col-resize right" data-var="--gf-col-ref" data-target="gf-graph" data-dir="right" data-min="60" data-max="600"></span></span>;
+
+    private static readonly RenderFragment GraphHead = @<span class="gf-head-cell">Graph<span class="gf-col-resize right" data-var="--gf-col-graph" data-target="gf-graph" data-dir="right" data-min="30" data-max="800"></span></span>;
+
     // Defaults apply until the user drags a border; the graph default follows the widest lane count seen.
     private string Columns =>
-        $"var(--gf-col-ref, 190px) var(--gf-col-graph, {GraphWidth}px) minmax(140px, 1fr)" +
+        (GraphFirst
+            ? $"var(--gf-col-graph, {GraphWidth}px) var(--gf-col-ref, 190px) minmax(140px, 1fr)"
+            : $"var(--gf-col-ref, 190px) var(--gf-col-graph, {GraphWidth}px) minmax(140px, 1fr)") +
         (W.Settings.ShowAuthorColumn ? " var(--gf-col-author, 150px)" : string.Empty) +
         (W.Settings.ShowDateColumn ? " var(--gf-col-date, 110px)" : string.Empty) +
         (W.Settings.ShowShaColumn ? " var(--gf-col-sha, 76px)" : string.Empty);
@@ -382,6 +409,7 @@
         {
             "author" => s with { ShowAuthorColumn = !s.ShowAuthorColumn },
             "date" => s with { ShowDateColumn = !s.ShowDateColumn },
+            "order" => s with { GraphBeforeRefs = !s.GraphBeforeRefs },
             _ => s with { ShowShaColumn = !s.ShowShaColumn },
         });
         StateHasChanged();

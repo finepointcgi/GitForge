@@ -4,34 +4,38 @@
 @inject IDialogService Dialogs
 @inject IAccountService Accounts
 @inject IPlatformShell Shell
+@inject ShortcutService Shortcuts
 
 <div class="gf-left-inner @(W.DraggedBranch is not null ? "gf-dragging-ref" : null)">
     @if (W.Snapshot is { } s)
     {
-        <div class="gf-left-filter">
-            <MudIcon Icon="@Icons.Material.Outlined.FilterList" Size="Size.Small" Class="gf-dim" />
-            <input class="gf-input gf-input-ghost" placeholder="Filter" @bind="_filter" @bind:event="oninput" aria-label="Filter branches and tags" />
+        <div class="gf-left-filter-bar">
+            <div class="gf-left-filter">
+                <MudIcon Icon="@Icons.Material.Outlined.FilterList" Size="Size.Small" Class="gf-dim" />
+                <input class="gf-input gf-input-ghost" placeholder="Filter" @bind="_filter" @bind:event="oninput" aria-label="Filter branches and tags" />
+            </div>
         </div>
 
         <SideSection Title="Local" Count="s.LocalBranches.Count" @bind-Expanded="_localOpen">
-            @if (GoneBranches(s) is { Count: > 0 } gone)
+            @if (W.GoneBranches is { Count: > 0 } gone)
             {
-                <button class="gf-gone-note" title="These branches' copies on the remote were deleted (usually after their pull requests merged). Click to review and delete the merged ones." @onclick="@(() => CleanUpGone(gone))">
+                <button class="gf-gone-note" title="These branches' copies on the remote were deleted (usually after their pull requests merged). Click to review and delete the merged ones." @onclick="@(() => Shortcuts.RaiseAsync("branch.cleanup"))">
                     <MudIcon Icon="@Icons.Material.Outlined.CleaningServices" Size="Size.Small" />
-                    <span class="gf-ellipsis">Clean up @gone.Count branch@(gone.Count == 1 ? string.Empty : "es") deleted on the remote…</span>
+                    <span class="gf-ellipsis">Clean up @gone.Count stale branch@(gone.Count == 1 ? string.Empty : "es")…</span>
                 </button>
             }
             @foreach (var group in Group(Filter(s.LocalBranches, b => b.Name)))
             {
+                var holdsCurrent = group.Any(b => b.IsCurrent);
                 @if (group.Key is { } folder)
                 {
-                    <button class="gf-folder" @onclick="@(() => ToggleFolder("l:" + folder))">
-                        <MudIcon Icon="@(IsFolderOpen("l:" + folder) ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+                    <button class="gf-folder" aria-expanded="@IsFolderOpen("l:" + folder, holdsCurrent)" @onclick="@(() => ToggleFolder("l:" + folder, holdsCurrent))">
+                        <MudIcon Icon="@(IsFolderOpen("l:" + folder, holdsCurrent) ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
                         <MudIcon Icon="@Icons.Material.Outlined.Folder" Size="Size.Small" /> @folder
                         <span class="gf-count">@group.Count()</span>
                     </button>
                 }
-                @if (group.Key is null || IsFolderOpen("l:" + group.Key))
+                @if (group.Key is null || IsFolderOpen("l:" + group.Key, holdsCurrent))
                 {
                     @foreach (var b in group)
                     {
@@ -88,40 +92,57 @@
         <SideSection Title="Remote" Count="s.RemoteBranches.Count" @bind-Expanded="_remoteOpen">
             @foreach (var remote in s.Remotes)
             {
-                <button class="gf-folder" title="@remote.FetchUrl" @onclick="@(() => ToggleFolder("r:" + remote.Name))">
-                    <MudIcon Icon="@(IsFolderOpen("r:" + remote.Name) ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+                <button class="gf-folder" title="@remote.FetchUrl" aria-expanded="@IsFolderOpen("r:" + remote.Name, true)" @onclick="@(() => ToggleFolder("r:" + remote.Name, true))">
+                    <MudIcon Icon="@(IsFolderOpen("r:" + remote.Name, true) ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
                     <MudIcon Icon="@ProviderIcon(remote.Hosted?.Provider)" Size="Size.Small" /> @remote.Name
                     <span class="gf-count">@s.RemoteBranches.Count(r => r.RemoteName == remote.Name)</span>
                 </button>
-                @if (IsFolderOpen("r:" + remote.Name))
+                @if (IsFolderOpen("r:" + remote.Name, true))
                 {
-                    @foreach (var b in Filter(s.RemoteBranches.Where(r => r.RemoteName == remote.Name), b => b.Name))
+                    var prefix = remote.Name.Length + 1;
+                    @foreach (var group in Group(Filter(s.RemoteBranches.Where(r => r.RemoteName == remote.Name), b => b.Name), prefix))
                     {
-                        var hidden = W.HiddenRefs.Contains(b.CanonicalName);
-                        <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
-                            <ActivatorContent Context="menu">
-                                <div class="gf-ref-row nested @(hidden ? "hidden-ref" : null) @(W.SoloRef == b.CanonicalName ? "solo" : null)" title="@(b.CanonicalName + "\nDrag onto a local branch to merge")"
-                                     draggable="true" @ondragstart="@(() => W.BeginBranchDrag(b))" @ondragend="W.EndBranchDrag"
-                                     @oncontextmenu="@(e => menu.OpenAsync(e))" @onclick="@(() => Reveal(b.TipSha))" @ondblclick="@(() => CheckoutRemote(b))">
-                                    <MudIcon Icon="@Icons.Material.Outlined.Cloud" Size="Size.Small" Class="gf-dim" />
-                                    <span class="gf-ellipsis gf-grow">@b.Name[(remote.Name.Length + 1)..]</span>
-                                    <button class="gf-eye" title="@(hidden ? "Show in graph" : "Hide from graph")" aria-label="@(hidden ? "Show branch" : "Hide branch")"
-                                            @onclick:stopPropagation="true" @onclick="@(() => W.ToggleHiddenAsync(b.CanonicalName))">
-                                        <MudIcon Icon="@(hidden ? Icons.Material.Outlined.VisibilityOff : Icons.Material.Outlined.Visibility)" Size="Size.Small" />
-                                    </button>
-                                </div>
-                            </ActivatorContent>
-                            <ChildContent>
-                                <MudMenuItem OnClick="@(() => CheckoutRemote(b))">Checkout as local branch</MudMenuItem>
-                                <MudMenuItem OnClick="@(() => Merge(b.Name))">Merge into @W.CurrentBranch</MudMenuItem>
-                                <MudMenuItem OnClick="@(() => Rebase(b.Name))">Rebase @W.CurrentBranch onto this</MudMenuItem>
-                                <MudDivider />
-                                <MudMenuItem OnClick="@(() => W.SoloAsync(b.CanonicalName))">@(W.SoloRef == b.CanonicalName ? "Unsolo" : "Solo in graph")</MudMenuItem>
-                                <MudMenuItem OnClick="@(() => W.ToggleHiddenAsync(b.CanonicalName))">@(hidden ? "Show in graph" : "Hide from graph")</MudMenuItem>
-                                <MudDivider />
-                                <MudMenuItem OnClick="@(() => DeleteRemote(b))"><span class="gf-danger">Delete on @remote.Name…</span></MudMenuItem>
-                            </ChildContent>
-                        </MudMenu>
+                        var folderKey = $"r:{remote.Name}/{group.Key}";
+                        var holdsUpstream = group.Any(b => b.Name == W.CurrentBranchHead?.UpstreamName);
+                        @if (group.Key is { } folder)
+                        {
+                            <button class="gf-folder nested" aria-expanded="@IsFolderOpen(folderKey, holdsUpstream)" @onclick="@(() => ToggleFolder(folderKey, holdsUpstream))">
+                                <MudIcon Icon="@(IsFolderOpen(folderKey, holdsUpstream) ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+                                <MudIcon Icon="@Icons.Material.Outlined.Folder" Size="Size.Small" /> @folder
+                                <span class="gf-count">@group.Count()</span>
+                            </button>
+                        }
+                        @if (group.Key is null || IsFolderOpen(folderKey, holdsUpstream))
+                        {
+                            @foreach (var b in group)
+                            {
+                                var hidden = W.HiddenRefs.Contains(b.CanonicalName);
+                                <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
+                                    <ActivatorContent Context="menu">
+                                        <div class="gf-ref-row @(group.Key is null ? "nested" : "nested2") @(hidden ? "hidden-ref" : null) @(W.SoloRef == b.CanonicalName ? "solo" : null)" title="@(b.CanonicalName + "\nDrag onto a local branch to merge")"
+                                             draggable="true" @ondragstart="@(() => W.BeginBranchDrag(b))" @ondragend="W.EndBranchDrag"
+                                             @oncontextmenu="@(e => menu.OpenAsync(e))" @onclick="@(() => Reveal(b.TipSha))" @ondblclick="@(() => CheckoutRemote(b))">
+                                            <MudIcon Icon="@Icons.Material.Outlined.Cloud" Size="Size.Small" Class="gf-dim" />
+                                            <span class="gf-ellipsis gf-grow">@b.Name[(group.Key is null ? prefix : prefix + group.Key.Length + 1)..]</span>
+                                            <button class="gf-eye" title="@(hidden ? "Show in graph" : "Hide from graph")" aria-label="@(hidden ? "Show branch" : "Hide branch")"
+                                                    @onclick:stopPropagation="true" @onclick="@(() => W.ToggleHiddenAsync(b.CanonicalName))">
+                                                <MudIcon Icon="@(hidden ? Icons.Material.Outlined.VisibilityOff : Icons.Material.Outlined.Visibility)" Size="Size.Small" />
+                                            </button>
+                                        </div>
+                                    </ActivatorContent>
+                                    <ChildContent>
+                                        <MudMenuItem OnClick="@(() => CheckoutRemote(b))">Checkout as local branch</MudMenuItem>
+                                        <MudMenuItem OnClick="@(() => Merge(b.Name))">Merge into @W.CurrentBranch</MudMenuItem>
+                                        <MudMenuItem OnClick="@(() => Rebase(b.Name))">Rebase @W.CurrentBranch onto this</MudMenuItem>
+                                        <MudDivider />
+                                        <MudMenuItem OnClick="@(() => W.SoloAsync(b.CanonicalName))">@(W.SoloRef == b.CanonicalName ? "Unsolo" : "Solo in graph")</MudMenuItem>
+                                        <MudMenuItem OnClick="@(() => W.ToggleHiddenAsync(b.CanonicalName))">@(hidden ? "Show in graph" : "Hide from graph")</MudMenuItem>
+                                        <MudDivider />
+                                        <MudMenuItem OnClick="@(() => DeleteRemote(b))"><span class="gf-danger">Delete on @remote.Name…</span></MudMenuItem>
+                                    </ChildContent>
+                                </MudMenu>
+                            }
+                        }
                     }
                 }
             }
@@ -301,7 +322,6 @@
     private string _filter = string.Empty;
     private string? _dropOn; // local branch under a dragged branch
     private bool _localOpen = true, _remoteOpen = true, _prsOpen = true, _tagsOpen, _stashesOpen = true, _submodulesOpen = true, _lfsOpen = true;
-    private readonly HashSet<string> _closedFolders = [];
     private IReadOnlyList<HostedPullRequest>? _prs;
     private HostingAccount? _prAccount;
     private string? _prsLoadedFor;
@@ -375,17 +395,24 @@
     private IEnumerable<T> Filter<T>(IEnumerable<T> items, Func<T, string> name) =>
         string.IsNullOrWhiteSpace(_filter) ? items : items.Where(i => name(i).Contains(_filter, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Groups "feature/x" style names under a folder; names without '/' have a null key and list first.</summary>
-    private static IEnumerable<IGrouping<string?, BranchHead>> Group(IEnumerable<BranchHead> branches) =>
-        branches.GroupBy(b => b.Name.Contains('/', StringComparison.Ordinal) ? b.Name[..b.Name.IndexOf('/', StringComparison.Ordinal)] : null)
+    /// <summary>
+    /// Groups "feature/x" style names under their first folder, ignoring the first <paramref name="prefix"/> characters
+    /// (a remote branch's "origin/"). Names without a folder have a null key and list first.
+    /// </summary>
+    private static IEnumerable<IGrouping<string?, BranchHead>> Group(IEnumerable<BranchHead> branches, int prefix = 0) =>
+        branches.GroupBy(b => b.Name.IndexOf('/', prefix) is var slash && slash > prefix ? b.Name[prefix..slash] : null)
                 .OrderBy(g => g.Key is null ? 0 : 1).ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase);
 
-    private bool IsFolderOpen(string key) => !_closedFolders.Contains(key) || !string.IsNullOrWhiteSpace(_filter);
+    /// <summary>
+    /// Branch folders start closed so repositories with many feature/, fix/, chore/ branches stay scannable; the folder
+    /// holding the current branch (or its upstream) starts open. A choice the user makes lasts for the tab, and a filter
+    /// opens every folder so matches are visible.
+    /// </summary>
+    private bool IsFolderOpen(string key, bool openByDefault) => !string.IsNullOrWhiteSpace(_filter) || FolderState(key, openByDefault);
 
-    private void ToggleFolder(string key)
-    {
-        if (!_closedFolders.Remove(key)) _closedFolders.Add(key);
-    }
+    private bool FolderState(string key, bool openByDefault) => W.SidebarFolders.TryGetValue(key, out var open) ? open : openByDefault;
+
+    private void ToggleFolder(string key, bool openByDefault) => W.SidebarFolders[key] = !FolderState(key, openByDefault);
 
     private static string ProviderIcon(HostingProviderKind? kind) => kind switch
     {
@@ -458,18 +485,6 @@
     private static string GoneTip(BranchHead b) =>
         $"{b.UpstreamName} was deleted on the remote, usually after its pull request merged. A fetch then removed the remote copy. " +
         "Your local branch and its commits are untouched. Right-click to delete it, push it again, or stop tracking.";
-
-    private static List<BranchHead> GoneBranches(RepositorySnapshot s) => s.LocalBranches.Where(b => b.IsUpstreamGone && !b.IsCurrent).ToList();
-
-    private async Task CleanUpGone(IReadOnlyList<BranchHead> gone)
-    {
-        var names = gone.Select(b => b.Name).ToList();
-        var list = string.Join(", ", names.Take(15)) + (names.Count > 15 ? $", and {names.Count - 15} more" : string.Empty);
-        var message = $"Their copies on the remote were deleted: {list}. " +
-                      $"GitForge deletes only branches whose commits are already in {W.CurrentBranch ?? "HEAD"}, so no work is lost. " +
-                      "Branches with other commits (common after squash merges) are kept for you to review.";
-        if (await Confirm("Clean up branches", message, "Delete merged")) await W.CleanUpGoneBranchesAsync(names);
-    }
 
     private void CreatePr(BranchHead b)
     {
