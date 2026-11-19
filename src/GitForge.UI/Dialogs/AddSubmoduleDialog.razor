@@ -1,0 +1,51 @@
+@using GitForge.Core.Validation
+@inject RepoWorkspace W
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" Value="_url" ValueChanged="SetUrl" Label="Repository URL" Placeholder="https://github.com/org/library.git" Immediate="true"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" AutoFocus="true" />
+        <MudTextField T="string" Value="_path" ValueChanged="SetPath" Label="Folder in this repository" Placeholder="libs/library" Immediate="true"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Error="@(PathError is not null && _path.Length > 0)" ErrorText="@PathError" />
+        <MudTextField T="string" @bind-Value="_branch" Label="Branch to track (optional)" Placeholder="main" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Error="@(BranchError is not null)" ErrorText="@BranchError" HelperText="Used by “Update to the newest remote commit”. Empty = the remote's default branch." />
+        <p class="gf-dim gf-small">GitForge clones it into the folder and stages it with its .gitmodules entry. Commit to share it with your team.</p>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanAdd)" OnClick="Add">Add submodule</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    private string _url = string.Empty;
+    private string _path = string.Empty;
+    private string _branch = string.Empty;
+    private bool _pathEdited;
+
+    private string? PathError => SubmodulePath.Validate(_path, W.Repo?.WorkingDirectory);
+
+    private string? BranchError => _branch.Trim().Length == 0 ? null : RefNameValidator.Validate(_branch.Trim());
+
+    private bool CanAdd => _url.Trim().Length > 0 && PathError is null && BranchError is null;
+
+    private void SetUrl(string value)
+    {
+        _url = value;
+        if (!_pathEdited) _path = SubmodulePath.Suggest(value);
+    }
+
+    private void SetPath(string value)
+    {
+        _path = value;
+        _pathEdited = true;
+    }
+
+    private async Task Add()
+    {
+        if (!CanAdd) return;
+        Dialog.Close();
+        await W.AddSubmoduleAsync(_url.Trim(), _path.Trim().Replace('\\', '/'), _branch.Trim().Length == 0 ? null : _branch.Trim());
+    }
+}

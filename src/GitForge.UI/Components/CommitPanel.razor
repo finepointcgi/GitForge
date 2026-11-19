@@ -3,8 +3,11 @@
 @inject RepoWorkspace W
 @inject ShortcutService Shortcuts
 @inject IDialogService Dialogs
+@inject ISnackbar Snackbar
 @inject IJSRuntime JS
+@inject IPlatformShell Shell
 
+<FileContextMenu @ref="_fileMenu" />
 <div class="gf-panel @(W.PanelFocused ? "focused" : null)" @onclick="@(() => W.PanelFocused = true)">
     @if (W.WipSelected)
     {
@@ -13,6 +16,9 @@
             <MudIcon Icon="@Icons.Material.Outlined.EditNote" Size="Size.Small" />
             <span><strong>@total</strong> file change@(total == 1 ? string.Empty : "s") on <span class="gf-branch-chip">@(W.CurrentBranch ?? "detached HEAD")</span></span>
             <span class="gf-spacer"></span>
+            <MudTooltip Text="Save all uncommitted changes as a patch file">
+                <MudIconButton Icon="@Icons.Material.Outlined.Description" Size="Size.Small" Disabled="@(total == 0)" OnClick="SaveWipPatch" aria-label="Save changes as a patch" />
+            </MudTooltip>
             <MudTooltip Text="Discard all changes">
                 <MudIconButton Icon="@Icons.Material.Outlined.DeleteSweep" Size="Size.Small" Color="Color.Error" Disabled="@(W.Status.Unstaged.Count == 0)" OnClick="@(() => Discard(W.Status.Unstaged))" aria-label="Discard all changes" />
             </MudTooltip>
@@ -21,9 +27,9 @@
         <div class="gf-panel-lists">
             @if (W.Status.Conflicted.Count > 0)
             {
-                <FileList Title="Conflicts" Files="W.Status.Conflicted" Selected="SelectedFile" OnSelect="Open" />
+                <FileList Title="Conflicts" Files="W.Status.Conflicted" Selected="SelectedFile" OnSelect="Open" OnContextMenu="ShowFileMenu" />
             }
-            <FileList Title="Unstaged files" Files="W.Status.Unstaged" Selected="SelectedFile" OnSelect="Open" OnStage="@(f => Stage([f]))" OnDiscard="@(f => Discard([f]))" EmptyText="No unstaged changes">
+            <FileList Title="Unstaged files" Files="W.Status.Unstaged" Selected="SelectedFile" OnSelect="Open" OnStage="@(f => Stage([f]))" OnDiscard="@(f => Discard([f]))" OnContextMenu="ShowFileMenu" EmptyText="No unstaged changes">
                 <HeaderActions>
                     @if (W.Status.Unstaged.Count > 0)
                     {
@@ -31,7 +37,7 @@
                     }
                 </HeaderActions>
             </FileList>
-            <FileList Title="Staged files" Files="W.Status.Staged" Selected="SelectedFile" OnSelect="Open" OnUnstage="@(f => Unstage([f]))" EmptyText="Nothing staged yet">
+            <FileList Title="Staged files" Files="W.Status.Staged" Selected="SelectedFile" OnSelect="Open" OnUnstage="@(f => Unstage([f]))" OnContextMenu="ShowFileMenu" EmptyText="Nothing staged yet">
                 <HeaderActions>
                     @if (W.Status.Staged.Count > 0)
                     {
@@ -42,6 +48,24 @@
         </div>
 
         <div class="gf-compose">
+            @if (W.Snapshot is { IsDetached: true, HeadSha: { } head })
+            {
+                var here = W.Snapshot.LocalBranches.Where(b => b.TipSha == head).Select(b => b.Name).ToList();
+                <div class="gf-detached-warning" role="alert">
+                    <MudIcon Icon="@Icons.Material.Outlined.WarningAmber" Size="Size.Small" />
+                    <div class="gf-grow">
+                        <strong>Not on a branch (detached HEAD).</strong>
+                        A commit made here belongs to no branch: it's easy to lose, and it can't be pushed until it's on one.@(W.Repo is { } r && IsSubmodule(r.WorkingDirectory) ? " Submodules are usually detached after an update." : null)
+                        <div class="gf-detached-actions">
+                            <button class="gf-btn gf-btn-stage" @onclick="@(() => CommitActions.NewBranchAsync(W, Dialogs, HeadCommit(head)))">Create a branch here…</button>
+                            @foreach (var name in here.Take(3))
+                            {
+                                <button class="gf-btn gf-btn-ghost" title="@name points at this commit, so your files don't change" @onclick="@(() => W.CheckoutAsync(name))">Switch to @name</button>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
             <div class="gf-compose-title">Commit message</div>
             <div class="gf-summary-wrap">
                 <input @ref="_summaryBox" class="gf-input gf-summary" placeholder="Summary" @bind="_summary" @bind:event="oninput" aria-label="Commit summary" />
@@ -139,6 +163,7 @@
             @foreach (var f in d.Changes)
             {
                 <div class="gf-file-row @(W.OpenDiff?.CommitFile == f && W.OpenDiff?.CommitSha == d.Summary.Sha ? "selected" : null)" @onclick="@(() => W.ShowDiff(new DiffTarget(null, d.Summary.Sha, f)))"
+                     @oncontextmenu="@(e => _fileMenu!.OpenAsync(e, FileMenuTarget.ForCommit(d.Summary.Sha, f)))" @oncontextmenu:preventDefault="true"
                      title="@(f.OldPath is null ? f.Path : $"{f.OldPath} → {f.Path}")">
                     <StatusGlyph Kind="f.Kind" />
                     <span class="gf-ellipsis gf-grow"><span class="gf-filename">@System.IO.Path.GetFileName(f.Path)</span> <span class="gf-dim">@System.IO.Path.GetDirectoryName(f.Path)?.Replace('\\', '/')</span></span>
@@ -161,6 +186,26 @@
     private string _description = string.Empty;
     private bool _amend, _signOff, _pushAfter;
     private ElementReference _summaryBox;
+    private FileContextMenu? _fileMenu;
+
+    private Task ShowFileMenu((MouseEventArgs Mouse, FileStatusEntry File) e) =>
+        _fileMenu is null ? Task.CompletedTask : _fileMenu.OpenAsync(e.Mouse, FileMenuTarget.For(e.File));
+
+    /// <summary>A repository whose .git is a file pointing into another repository's .git/modules is a submodule.</summary>
+    private static bool IsSubmodule(string workDir)
+    {
+        var dotGit = System.IO.Path.Combine(workDir, ".git");
+        return File.Exists(dotGit) && File.ReadLines(dotGit).FirstOrDefault()?.Replace('\\', '/').Contains("/modules/", StringComparison.Ordinal) == true;
+    }
+
+    private CommitInfo HeadCommit(string sha) => W.FindCommit(sha) ?? new CommitInfo(sha, [], string.Empty, string.Empty, DateTimeOffset.Now, string.Empty);
+
+    private async Task SaveWipPatch()
+    {
+        var name = $"{W.Repo?.Name ?? "changes"}-{DateTime.Now:yyyyMMdd-HHmm}.patch";
+        var file = await PathPrompt.SaveFileAsync(Shell, Dialogs, "Save uncommitted changes as a patch", name, PathPrompt.PatchFilter);
+        if (file is not null) await W.SaveUncommittedPatchAsync(file);
+    }
 
     private FileStatusEntry? SelectedFile => W.Center == CenterView.Diff ? W.OpenDiff?.Working : null;
 
@@ -256,6 +301,15 @@
 
     private async Task Discard(IReadOnlyCollection<FileStatusEntry> files)
     {
+        // A submodule's change is its checked-out commit: "discarding" puts it back at the recorded one (git restore can't).
+        var submodules = files.Where(f => W.SubmoduleAt(f.Path) is not null).ToList();
+        foreach (var sm in submodules)
+        {
+            if (W.SubmoduleAt(sm.Path)!.State.HasFlag(SubmoduleState.WorkDirDirty)) W.Info($"{sm.Path} has uncommitted changes inside it. Commit or stash them there first.", Severity.Warning);
+            else await W.UpdateSubmoduleAsync(sm.Path);
+        }
+
+        files = files.Except(submodules).ToList();
         if (files.Count == 0) return;
         var what = files.Count == 1 ? $"'{files.First().Path}'" : $"{files.Count} files";
         if (await Dialogs.ShowMessageBoxAsync("Discard changes", $"Discard all changes to {what}? {Keymap.UndoName(W.Settings)} restores them until your next action.", yesText: "Discard", cancelText: "Cancel") != true) return;
@@ -279,8 +333,19 @@
     {
         if (!CanCommit) return;
         var request = new CommitRequest(Message, _amend, _signOff, AllowEmpty: _amend && W.Status.Staged.Count == 0);
+        var detached = W.Snapshot?.IsDetached == true;
         var ok = await W.RunUndoableAsync(_amend ? "Amending" : "Committing", r => UndoableOperations.CommitAsync(r, request), _amend ? $"Commit amended ({Keymap.UndoName(W.Settings)} reverses it)" : $"Committed ({Keymap.UndoName(W.Settings)} reverses it)");
         if (!ok) return;
+        if (detached && W.Snapshot?.HeadSha is { } committed)
+        {
+            Snackbar.Add("That commit isn't on a branch. Create one to keep it.", Severity.Warning, o =>
+            {
+                o.Action = "Create branch";
+                o.ActionColor = Color.Primary;
+                o.VisibleStateDuration = 20000;
+                o.OnClick = _ => CommitActions.NewBranchAsync(W, Dialogs, HeadCommit(committed));
+            });
+        }
         _summary = _description = string.Empty;
         _amend = false;
         if (_pushAfter) await W.PushAsync();

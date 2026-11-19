@@ -1,0 +1,66 @@
+@inject RepoWorkspace W
+@inject IPlatformShell Shell
+@inject IDialogService Dialogs
+
+<MudDialog>
+    <DialogContent>
+        <MudRadioGroup T="bool" @bind-Value="_everything">
+            <MudRadio T="bool" Value="true" Size="Size.Small" Dense="true">All branches and tags</MudRadio>
+            <MudRadio T="bool" Value="false" Size="Size.Small" Dense="true" Disabled="@(W.CurrentBranch is null)">Only @(W.CurrentBranch ?? "the current branch")</MudRadio>
+        </MudRadioGroup>
+        <MudTextField T="string" @bind-Value="_basis" Label="Only commits after (optional)" Placeholder="a tag, branch, or commit, such as sent-2026-11-01" Immediate="true"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      HelperText="For a smaller bundle: the receiving repository must already have this commit. Tag what you send to use it next time." />
+        <div class="gf-dialog-row">
+            <MudTextField T="string" @bind-Value="_file" Label="Bundle file" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" Class="gf-grow"
+                          Error="@(FileError is not null)" ErrorText="@FileError" />
+            @if (Shell.CanPickFiles)
+            {
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="Browse">Browse…</MudButton>
+            }
+        </div>
+        <p class="gf-dim gf-small">
+            A bundle is one file holding commits and branches, for moving work where there's no network path between the repositories
+            (removable media, a one-way transfer). On the other side use “Fetch from bundle…”, or clone the file like a URL.
+            Bundles are not encrypted; handle them like the source code they contain.
+        </p>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(FileError is not null)" OnClick="Create">Create bundle</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    private bool _everything = true;
+    private string _basis = string.Empty;
+    private string _file = string.Empty;
+
+    private string? FileError =>
+        _file.Trim().Length == 0 ? "Required"
+        : !Path.IsPathRooted(_file.Trim().Trim('"')) ? "Enter a full path, such as D:\\transfer\\app.bundle."
+        : null;
+
+    protected override void OnInitialized()
+    {
+        var folder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        _file = Path.Combine(folder, DefaultName);
+    }
+
+    private string DefaultName => $"{W.Repo?.Name ?? "repository"}-{DateTime.Now:yyyyMMdd-HHmm}.bundle";
+
+    private async Task Browse()
+    {
+        var file = await Shell.PickSaveFileAsync("Save bundle", Path.GetFileName(_file.Trim()) is { Length: > 0 } n ? n : DefaultName, PathPrompt.BundleFilter, Path.GetDirectoryName(_file.Trim()));
+        if (file is not null) _file = file;
+    }
+
+    private async Task Create()
+    {
+        if (FileError is not null) return;
+        Dialog.Close();
+        IReadOnlyList<string> refs = _everything || W.CurrentBranch is null ? ["--branches", "--tags"] : [W.CurrentBranch];
+        await W.CreateBundleAsync(_file.Trim().Trim('"'), refs, _basis.Trim().Length == 0 ? null : _basis.Trim());
+    }
+}

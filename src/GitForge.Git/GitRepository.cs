@@ -29,6 +29,8 @@ public sealed class GitRepository : IGitRepository
         History = new HistoryOperations(_ctx);
         Submodules = new SubmoduleOperations(_ctx);
         Lfs = new LfsOperations(_ctx);
+        Worktrees = new WorktreeOperations(_ctx);
+        Transfer = new TransferOperations(_ctx);
     }
 
     public string WorkingDirectory { get; }
@@ -44,6 +46,8 @@ public sealed class GitRepository : IGitRepository
     public IHistoryOperations History { get; }
     public ISubmoduleOperations Submodules { get; }
     public ILfsOperations Lfs { get; }
+    public IWorktreeOperations Worktrees { get; }
+    public ITransferOperations Transfer { get; }
 
     public Task<GitResult> RunRawAsync(IReadOnlyList<string> arguments, IProgress<string>? output = null, CancellationToken cancellationToken = default) =>
         _ctx.TryWriteAsync(arguments, cancellationToken, progress: output);

@@ -1,11 +1,11 @@
-@using GitForge.Git.Undo
 @inject RepoWorkspace W
 @inject IDialogService Dialogs
+@inject IPlatformShell Shell
 @inject IJSRuntime JS
 
 <MudMenuItem Icon="@Icons.Material.Outlined.Login" OnClick="Checkout">Checkout (detached)</MudMenuItem>
-<MudMenuItem Icon="@Icons.Material.Outlined.CallSplit" OnClick="NewBranch">New branch here…</MudMenuItem>
-<MudMenuItem Icon="@Icons.Material.Outlined.LocalOffer" OnClick="NewTag">New tag here…</MudMenuItem>
+<MudMenuItem Icon="@Icons.Material.Outlined.CallSplit" OnClick="@(() => CommitActions.NewBranchAsync(W, Dialogs, Commit))">New branch here…</MudMenuItem>
+<MudMenuItem Icon="@Icons.Material.Outlined.LocalOffer" OnClick="@(() => CommitActions.NewTagAsync(W, Dialogs, Commit))">New tag here…</MudMenuItem>
 <MudDivider />
 @if (InMultiSelection)
 {
@@ -17,45 +17,41 @@
 }
 else
 {
-    <MudMenuItem Icon="@Icons.Material.Outlined.ContentPasteGo" OnClick="CherryPick">Cherry-pick onto @(W.CurrentBranch ?? "HEAD")</MudMenuItem>
+    <MudMenuItem Icon="@Icons.Material.Outlined.ContentPasteGo" OnClick="@(() => CommitActions.CherryPickAsync(W, Commit))">Cherry-pick onto @(W.CurrentBranch ?? "HEAD")</MudMenuItem>
 }
 @if (CompareBase is { } other)
 {
     <MudMenuItem Icon="@Icons.Material.Outlined.CompareArrows" OnClick="@(() => W.CompareCommits(other, Commit.Sha))">Compare with selected (@other[..7])</MudMenuItem>
 }
 <MudMenuItem Icon="@Icons.Material.Outlined.Difference" OnClick="@(() => W.ShowCompare(Commit.Sha, null))">Compare with working tree</MudMenuItem>
-<MudMenuItem Icon="@Icons.Material.Outlined.Undo" OnClick="Revert">Revert commit</MudMenuItem>
-<MudMenuItem Icon="@Icons.Material.Outlined.Reorder" OnClick="InteractiveRebase">Interactive rebase children…</MudMenuItem>
+<MudMenuItem Icon="@Icons.Material.Outlined.Undo" OnClick="@(() => CommitActions.RevertAsync(W, Dialogs, Commit))">Revert commit</MudMenuItem>
+<MudMenuItem Icon="@Icons.Material.Outlined.Reorder" OnClick="@(() => CommitActions.InteractiveRebaseAsync(W, Dialogs, Commit))">Interactive rebase children…</MudMenuItem>
+<MudMenuItem Icon="@Icons.Material.Outlined.Description" OnClick="SavePatches">@(InMultiSelection ? $"Save {W.MultiSelection.Count} selected commits as patches…" : "Save as patch…")</MudMenuItem>
+<MudMenu Label="Bisect" StartIcon="@Icons.Material.Outlined.ManageSearch" Dense="true">
+    @if (W.IsBisecting)
+    {
+        <MudMenuItem OnClick="@(() => CommitActions.BisectAsync(W, Commit, BisectMark.Good))">Mark good (the bug isn't here)</MudMenuItem>
+        <MudMenuItem OnClick="@(() => CommitActions.BisectAsync(W, Commit, BisectMark.Bad))">Mark bad (the bug is here)</MudMenuItem>
+        <MudMenuItem OnClick="@(() => W.MarkBisectAsync(BisectMark.Skip, Commit.Sha))">Skip (can't be tested)</MudMenuItem>
+        <MudMenuItem OnClick="W.ResetBisectAsync">End bisect</MudMenuItem>
+    }
+    else
+    {
+        <MudMenuItem OnClick="@(() => CommitActions.BisectAsync(W, Commit, BisectMark.Bad))">Start: the bug is in this commit</MudMenuItem>
+        <MudMenuItem OnClick="@(() => CommitActions.BisectAsync(W, Commit, BisectMark.Good))">Start: this commit works</MudMenuItem>
+    }
+</MudMenu>
 <MudDivider />
-<MudMenuItem OnClick="@(() => Reset(ResetMode.Soft))">Reset @(W.CurrentBranch ?? "HEAD") here — soft (keep index)</MudMenuItem>
-<MudMenuItem OnClick="@(() => Reset(ResetMode.Mixed))">Reset @(W.CurrentBranch ?? "HEAD") here — mixed (keep files)</MudMenuItem>
-<MudMenuItem OnClick="@(() => Reset(ResetMode.Hard))"><span class="gf-danger">Reset @(W.CurrentBranch ?? "HEAD") here — hard (discard)…</span></MudMenuItem>
+<MudMenuItem OnClick="@(() => CommitActions.ResetAsync(W, Dialogs, Commit, ResetMode.Soft))">Reset @(W.CurrentBranch ?? "HEAD") here — soft (keep index)</MudMenuItem>
+<MudMenuItem OnClick="@(() => CommitActions.ResetAsync(W, Dialogs, Commit, ResetMode.Mixed))">Reset @(W.CurrentBranch ?? "HEAD") here — mixed (keep files)</MudMenuItem>
+<MudMenuItem OnClick="@(() => CommitActions.ResetAsync(W, Dialogs, Commit, ResetMode.Hard))"><span class="gf-danger">Reset @(W.CurrentBranch ?? "HEAD") here — hard (discard)…</span></MudMenuItem>
 <MudDivider />
 <MudMenuItem Icon="@Icons.Material.Outlined.ContentCopy" OnClick="CopySha">Copy SHA</MudMenuItem>
 
 @code {
     [Parameter, EditorRequired] public CommitInfo Commit { get; set; } = default!;
 
-    private Task Run(string label, Func<IGitRepository, Task> op, string? success = null) => W.RunAsync(label, (r, _) => op(r), success);
-
     private Task Checkout() => W.CheckoutAsync(Commit.Sha);
-
-    private async Task NewBranch()
-    {
-        var name = await TextPromptDialog.ShowAsync(Dialogs, $"New branch at {Commit.ShortSha}", "Branch name", string.Empty, validateRef: true);
-        if (name is not null) await W.RunUndoableAsync($"Creating {name}", r => UndoableOperations.CreateBranchAsync(r, name, Commit.Sha, checkout: true), $"Created and checked out {name}");
-    }
-
-    private async Task NewTag()
-    {
-        var name = await TextPromptDialog.ShowAsync(Dialogs, $"New tag at {Commit.ShortSha}", "Tag name", string.Empty, validateRef: true);
-        if (name is null) return;
-        var message = await TextPromptDialog.ShowAsync(Dialogs, "Tag message", "Message (leave empty for a lightweight tag)", string.Empty, allowEmpty: true, multiline: true);
-        if (message is null) return;
-        await Run($"Tagging {name}", r => r.Branches.CreateTagAsync(name, Commit.Sha, message), $"Created tag {name}");
-    }
-
-    private Task CherryPick() => Run($"Cherry-picking {Commit.ShortSha}", r => r.History.CherryPickAsync([Commit.Sha]));
 
     private bool InMultiSelection => W.MultiSelection.Count > 1 && W.MultiSelection.Contains(Commit.Sha);
 
@@ -77,38 +73,8 @@ else
         }
     }
 
-    private async Task Revert()
-    {
-        if (await Dialogs.ShowMessageBoxAsync("Revert commit", $"Create a new commit that reverts {Commit.ShortSha} \"{Commit.Subject}\"?", yesText: "Revert", cancelText: "Cancel") == true)
-        {
-            await Run($"Reverting {Commit.ShortSha}", r => r.History.RevertAsync(Commit.Sha));
-        }
-    }
-
-    private async Task Reset(ResetMode mode)
-    {
-        if (mode == ResetMode.Hard &&
-            await Dialogs.ShowMessageBoxAsync("Hard reset", $"Move {W.CurrentBranch ?? "HEAD"} to {Commit.ShortSha} and DISCARD all uncommitted changes? Committed work stays recoverable via the reflog.", yesText: "Reset hard", cancelText: "Cancel") != true)
-        {
-            return;
-        }
-
-        await W.RunUndoableAsync($"Resetting to {Commit.ShortSha}", r => UndoableOperations.ResetAsync(r, Commit.Sha, mode), $"Reset complete ({Keymap.UndoName(W.Settings)} reverses it)");
-    }
-
-    private async Task InteractiveRebase()
-    {
-        if (!W.Status.IsClean)
-        {
-            W.Info("Commit or stash your changes before an interactive rebase.", Severity.Warning);
-            return;
-        }
-
-        var parameters = new DialogParameters<InteractiveRebaseDialog> { { d => d.BaseSha, Commit.Sha } };
-        var dialog = await Dialogs.ShowAsync<InteractiveRebaseDialog>($"Interactive rebase onto {Commit.ShortSha}", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true });
-        await dialog.Result;
-    }
+    private Task SavePatches() =>
+        CommitActions.SavePatchesAsync(W, Shell, Dialogs, InMultiSelection ? W.SelectedCommitsOldestFirst() : [Commit]);
 
     private async Task CopySha()
     {

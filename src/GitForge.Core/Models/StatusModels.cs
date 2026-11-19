@@ -71,7 +71,21 @@ public sealed record PushRequest(
     string? RemoteBranch = null,
     bool SetUpstream = false,
     bool ForceWithLease = false,
-    bool IncludeTags = false);
+    bool IncludeTags = false,
+    SubmodulePushMode Submodules = SubmodulePushMode.Check);
+
+/// <summary>What a push does about submodule commits that the pushed commits point to (<c>--recurse-submodules</c>).</summary>
+public enum SubmodulePushMode
+{
+    /// <summary>Push without looking at submodules.</summary>
+    None,
+
+    /// <summary>Refuse the push when a submodule commit it points to is not on any of that submodule's remotes.</summary>
+    Check,
+
+    /// <summary>Push those submodule commits first, then the superproject.</summary>
+    OnDemand,
+}
 
 public sealed record StashRequest(string? Message, bool IncludeUntracked = false, bool KeepIndex = false, IReadOnlyList<string>? Paths = null);
 

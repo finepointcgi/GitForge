@@ -1,0 +1,161 @@
+@using GitForge.Core.Validation
+@inject RepoWorkspace W
+@inject IPlatformShell Shell
+@inject IDialogService Dialogs
+
+<MudDialog>
+    <DialogContent>
+        <MudRadioGroup T="bool" Value="_createNew" ValueChanged="SetMode">
+            <MudRadio T="bool" Value="false" Size="Size.Small" Dense="true">Check out an existing branch</MudRadio>
+            <MudRadio T="bool" Value="true" Size="Size.Small" Dense="true">Create a new branch</MudRadio>
+        </MudRadioGroup>
+        @if (_createNew)
+        {
+            <MudTextField T="string" Value="_newName" ValueChanged="SetNewName" Label="New branch name" Placeholder="feature/ABC-123-short-description" Immediate="true"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" AutoFocus="true" Error="@(NameError is not null && _newName.Length > 0)" ErrorText="@NameError" />
+            <MudAutocomplete T="string" @bind-Value="_start" Label="Start from" SearchFunc="SearchAll" CoerceText="true" CoerceValue="true" MaxItems="60"
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true" />
+        }
+        else
+        {
+            <MudAutocomplete T="string" Value="_branch" ValueChanged="SetBranch" Label="Branch" SearchFunc="SearchAvailable" CoerceText="true" MaxItems="60"
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true" Error="@(BranchError is not null)" ErrorText="@BranchError"
+                             HelperText="A remote branch gets a local branch of the same name that tracks it." />
+        }
+        <div class="gf-dialog-row">
+            <MudTextField T="string" Value="_folder" ValueChanged="SetFolder" Label="Folder" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Error="@(FolderError is not null)" ErrorText="@FolderError" Class="gf-grow" />
+            @if (Shell.CanPickFolder)
+            {
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="Browse">Browse…</MudButton>
+            }
+        </div>
+        <MudCheckBox T="bool" @bind-Value="_open" Label="Open it in a new tab" Size="Size.Small" Dense="true" />
+        <p class="gf-dim gf-small">
+            A worktree is another folder with its own checkout of this repository: work on a second branch (or review a pull request)
+            without stashing or switching here. Both share commits, branches, and stashes. Git won't check the same branch out in two worktrees.
+        </p>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!CanCreate)" OnClick="Create">Create worktree</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>Branch to start with (from a branch's right-click menu).</summary>
+    [Parameter] public string? Branch { get; set; }
+
+    private bool _createNew;
+    private string _newName = string.Empty;
+    private string _start = string.Empty;
+    private string _branch = string.Empty;
+    private string _folder = string.Empty;
+    private bool _folderEdited;
+    private bool _open = true;
+
+    private HashSet<string> CheckedOut => W.Worktrees.Select(w => w.Branch).Append(W.CurrentBranch).OfType<string>().ToHashSet(StringComparer.Ordinal);
+
+    private IEnumerable<string> Locals => W.Snapshot?.LocalBranches.Select(b => b.Name) ?? [];
+
+    private IEnumerable<string> Remotes => W.Snapshot?.RemoteBranches.Select(b => b.Name) ?? [];
+
+    private string? NameError => RefNameValidator.Validate(_newName.Trim())
+        ?? (Locals.Contains(_newName.Trim()) ? "A branch with this name already exists." : null);
+
+    private string? BranchError =>
+        _branch.Length == 0 ? null
+        : CheckedOut.Contains(_branch) ? $"{_branch} is already checked out{(W.CurrentBranch == _branch ? " here" : " in another worktree")}."
+        : !Locals.Contains(_branch) && !Remotes.Contains(_branch) ? "No such branch."
+        : RemoteLocalName(_branch) is { } local && CheckedOut.Contains(local) ? $"{local} is already checked out." : null;
+
+    private string? FolderError =>
+        _folder.Trim().Length == 0 ? "Required"
+        : !Path.IsPathRooted(_folder.Trim().Trim('"')) ? "Enter a full path, such as C:\\src\\app-feature."
+        : Directory.Exists(_folder.Trim().Trim('"')) && Directory.EnumerateFileSystemEntries(_folder.Trim().Trim('"')).Any() ? "That folder already exists and isn't empty."
+        : null;
+
+    private bool CanCreate => FolderError is null && (_createNew ? NameError is null && _start.Trim().Length > 0 : _branch.Length > 0 && BranchError is null);
+
+    protected override void OnInitialized()
+    {
+        _start = W.CurrentBranch ?? "HEAD";
+        if (Branch is { } b && !CheckedOut.Contains(b)) SetBranch(b);
+    }
+
+    /// <summary>For a remote branch (origin/x) without a local branch of that name: the local name to create.</summary>
+    private string? RemoteLocalName(string branch)
+    {
+        var remote = W.Snapshot?.RemoteBranches.FirstOrDefault(r => r.Name == branch);
+        return remote?.RemoteName is { } name ? branch[(name.Length + 1)..] : null;
+    }
+
+    private Task<IEnumerable<string>> SearchAvailable(string text, CancellationToken _) =>
+        Task.FromResult(Filter(Locals.Where(b => !CheckedOut.Contains(b)).Concat(Remotes), text));
+
+    private Task<IEnumerable<string>> SearchAll(string text, CancellationToken _) => Task.FromResult(Filter(Locals.Concat(Remotes), text));
+
+    private static IEnumerable<string> Filter(IEnumerable<string> names, string? text) =>
+        string.IsNullOrWhiteSpace(text) ? names : names.Where(n => n.Contains(text, StringComparison.OrdinalIgnoreCase));
+
+    private void SetMode(bool createNew)
+    {
+        _createNew = createNew;
+        Suggest();
+    }
+
+    private void SetNewName(string value)
+    {
+        _newName = value;
+        Suggest();
+    }
+
+    private void SetBranch(string value)
+    {
+        _branch = value ?? string.Empty;
+        Suggest();
+    }
+
+    private void SetFolder(string value)
+    {
+        _folder = value;
+        _folderEdited = true;
+    }
+
+    private void Suggest()
+    {
+        var name = _createNew ? _newName.Trim() : RemoteLocalName(_branch) ?? _branch;
+        if (!_folderEdited && W.Repo is { } repo && name.Length > 0) _folder = WorktreePath.Suggest(repo.WorkingDirectory, name);
+    }
+
+    private async Task Browse()
+    {
+        var parent = await Shell.PickFolderAsync(Path.GetDirectoryName(_folder.Trim()) ?? W.Repo?.WorkingDirectory);
+        if (parent is null) return;
+        _folder = Directory.EnumerateFileSystemEntries(parent).Any() ? Path.Combine(parent, Path.GetFileName(_folder.Trim().TrimEnd('\\'))) : parent;
+        _folderEdited = true;
+    }
+
+    private async Task Create()
+    {
+        if (!CanCreate) return;
+        Dialog.Close();
+        var folder = _folder.Trim().Trim('"');
+        if (_createNew)
+        {
+            await W.AddWorktreeAsync(folder, _start.Trim(), _newName.Trim(), _open);
+        }
+        else if (RemoteLocalName(_branch) is { } local)
+        {
+            // origin/x → a local x tracking it, unless one already exists.
+            if (Locals.Contains(local)) await W.AddWorktreeAsync(folder, local, null, _open);
+            else await W.AddWorktreeAsync(folder, _branch, local, _open);
+        }
+        else
+        {
+            await W.AddWorktreeAsync(folder, _branch, null, _open);
+        }
+    }
+}

@@ -118,6 +118,13 @@ internal sealed class IndexOperations(RepoContext ctx) : IIndexOperations
         return ctx.TryWriteAsync(args, cancellationToken);
     }
 
+    public Task StopTrackingAsync(IReadOnlyCollection<string> paths, CancellationToken cancellationToken = default) =>
+        paths.Count == 0 ? Task.CompletedTask :
+        ctx.WriteAsync("stop tracking", ["--literal-pathspecs", "rm", "--cached", "-r", "-q", .. RepoContext.PathspecFromStdin], cancellationToken, RepoContext.PathspecPayload(paths));
+
+    public Task RestoreFromAsync(string revision, string path, CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("restore file", ["--literal-pathspecs", "restore", $"--source={BranchOperations.Guard(revision)}", "--staged", "--worktree", "--", path], cancellationToken);
+
     private Task<bool> IsUnbornAsync(CancellationToken ct) => ctx.Lib.RunAsync(r => r.Info.IsHeadUnborn, ct);
 
     public async Task<ConflictSides> GetConflictSidesAsync(string path, CancellationToken cancellationToken = default)
@@ -281,10 +288,18 @@ internal sealed class RemoteOperations(RepoContext ctx) : IRemoteOperations
         if (request.SetUpstream) args.Add("--set-upstream");
         if (request.ForceWithLease) args.Add("--force-with-lease");
         if (request.IncludeTags) args.Add("--follow-tags");
+        args.Add(request.Submodules switch
+        {
+            SubmodulePushMode.Check => "--recurse-submodules=check",
+            SubmodulePushMode.OnDemand => "--recurse-submodules=on-demand",
+            _ => "--recurse-submodules=no", // overrides push.recurseSubmodules when the user chose to push anyway
+        });
         var local = BranchOperations.Guard(request.LocalBranch);
         var remoteBranch = BranchOperations.Guard(request.RemoteBranch ?? request.LocalBranch);
         args.AddRange([BranchOperations.Guard(request.Remote), $"refs/heads/{local}:refs/heads/{remoteBranch}"]);
-        return ctx.WriteAsync("push", args, cancellationToken, progress: progress);
+
+        // English messages, so a refusal by the submodule check can be recognized (GitOutput.SubmodulesMissingOnRemote).
+        return ctx.WriteAsync("push", args, cancellationToken, progress: progress, env: RepoContext.EnglishMessages);
     }
 
     public Task AddAsync(string name, string url, CancellationToken cancellationToken = default) =>
@@ -578,6 +593,45 @@ internal sealed class HistoryOperations(RepoContext ctx) : IHistoryOperations
 
     public Task<GitResult> SkipAsync(CancellationToken cancellationToken = default) => SequencerAsync("--skip", cancellationToken);
 
+    public async Task<GitResult> StartBisectAsync(string revision, BisectMark mark, CancellationToken cancellationToken = default)
+    {
+        if (mark == BisectMark.Skip) throw new ArgumentException("Start a bisect by marking a commit good or bad.", nameof(mark));
+        await ctx.WriteAsync("bisect start", ["bisect", "start"], cancellationToken, env: RepoContext.EnglishMessages).ConfigureAwait(false);
+        return await MarkBisectAsync(mark, revision, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<GitResult> MarkBisectAsync(BisectMark mark, string? revision = null, CancellationToken cancellationToken = default)
+    {
+        var verb = mark switch
+        {
+            BisectMark.Good => "good",
+            BisectMark.Bad => "bad",
+            _ => "skip",
+        };
+        List<string> args = revision is null ? ["bisect", verb] : ["bisect", verb, BranchOperations.Guard(revision)];
+        return ctx.WriteAsync($"bisect {verb}", args, cancellationToken, env: RepoContext.EnglishMessages);
+    }
+
+    public Task ResetBisectAsync(CancellationToken cancellationToken = default) =>
+        ctx.WriteAsync("bisect reset", ["bisect", "reset"], cancellationToken);
+
+    public async Task<BisectStatus> GetBisectStatusAsync(CancellationToken cancellationToken = default)
+    {
+        var logPath = Path.Combine(ctx.GitDir, "BISECT_LOG");
+        if (!File.Exists(logPath)) return BisectStatus.None;
+
+        var refs = await ctx.RunAsync(["for-each-ref", "--format=%(refname) %(objectname)", "refs/bisect/"], cancellationToken).ConfigureAwait(false);
+        var log = await File.ReadAllTextAsync(logPath, cancellationToken).ConfigureAwait(false);
+        var status = GitOutput.ParseBisect(refs.EnsureSuccess("for-each-ref").StandardOutput, log, null);
+        if (status.Bad is null || status.Good.Count == 0 || status.FirstBad is not null) return status;
+
+        // Commits between the good ones and the bad one, not counting the bad one itself: what is left to test.
+        var count = await ctx.RunAsync(["rev-list", "--count", status.Bad, "--not", .. status.Good], cancellationToken).ConfigureAwait(false);
+        return int.TryParse(count.StandardOutput.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var n)
+            ? status with { Remaining = Math.Max(n - 1, 0) }
+            : status;
+    }
+
     private async Task<GitResult> SequencerAsync(string verb, CancellationToken ct)
     {
         var op = await ctx.Lib.RunAsync(RepositoryReader.DetectOperation, ct).ConfigureAwait(false);
@@ -678,6 +732,95 @@ internal sealed class SubmoduleOperations(RepoContext ctx) : ISubmoduleOperation
     }
 
     private static string[] In(string dir, params string[] args) => dir.Length == 0 ? args : ["-C", dir, .. args];
+
+    public async Task UpdateOneAsync(string path, IProgress<string>? progress, CancellationToken cancellationToken = default)
+    {
+        var (owner, inner) = SplitOwner(RepoContext.RelativePath(path));
+        await ctx.WriteAsync("submodule sync", In(owner, "--literal-pathspecs", "submodule", "sync", "--recursive", "--", inner), cancellationToken).ConfigureAwait(false);
+        await ctx.WriteAsync("submodule update", In(owner, "--literal-pathspecs", "submodule", "update", "--init", "--recursive", "--progress", "--", inner), cancellationToken, progress: progress).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The innermost submodule that contains <paramref name="path"/> (its own repository; empty for the superproject) and
+    /// the path relative to it. "libs/sub/nested" belongs to "libs/sub" when libs/sub has its own .git.
+    /// </summary>
+    internal (string Owner, string Inner) SplitOwner(string path)
+    {
+        var parts = path.Split('/');
+        for (var i = parts.Length - 1; i > 0; i--)
+        {
+            var owner = string.Join('/', parts[..i]);
+            var dotGit = Path.Combine(ctx.WorkDir, owner, ".git");
+            if (File.Exists(dotGit) || Directory.Exists(dotGit)) return (owner, string.Join('/', parts[i..]));
+        }
+
+        return (string.Empty, path);
+    }
+
+    public async Task UpdateToRemoteAsync(IReadOnlyCollection<string> paths, IProgress<string>? progress, CancellationToken cancellationToken = default)
+    {
+        if (paths.Count == 0) return;
+        var list = paths.Select(RepoContext.RelativePath).ToList();
+        await SyncAsync(list, recursive: false, cancellationToken).ConfigureAwait(false);
+        await ctx.WriteAsync("submodule update --remote", ["--literal-pathspecs", "submodule", "update", "--init", "--remote", "--progress", "--", .. list], cancellationToken, progress: progress).ConfigureAwait(false);
+
+        // Nested submodules follow the commits the new top-level commits record, not their own newest commits.
+        foreach (var path in list.Where(p => File.Exists(Path.Combine(ctx.WorkDir, p, ".gitmodules"))))
+        {
+            await ctx.WriteAsync("submodule update", ["-C", path, "submodule", "update", "--init", "--recursive", "--progress"], cancellationToken, progress: progress).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<string> PushRecordedCommitAsync(string path, string superRevision, IProgress<string>? progress, CancellationToken cancellationToken = default)
+    {
+        var ct = cancellationToken;
+        var p = RepoContext.RelativePath(path);
+        var recorded = (await ctx.RunAsync(["rev-parse", "--verify", "--quiet", $"{BranchOperations.Guard(superRevision)}:{p}"], ct, okCodes: [0, 1, 128]).ConfigureAwait(false)).StandardOutput.Trim();
+        if (recorded.Length < 40) throw new InvalidOperationException($"{superRevision} doesn't record a commit for {p}.");
+
+        var current = (await ctx.RunAsync(["-C", p, "symbolic-ref", "--quiet", "--short", "HEAD"], ct, okCodes: [0, 1, 128]).ConfigureAwait(false)).StandardOutput.Trim();
+        var containing = (await ctx.RunAsync(["-C", p, "branch", "--contains", recorded, "--format=%(refname:short)"], ct).ConfigureAwait(false))
+            .EnsureSuccess("branch --contains").StandardOutput
+            .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(b => !b.StartsWith('(') && b != "HEAD")
+            .ToList();
+        var branch = containing.Contains(current) ? current : containing.FirstOrDefault()
+            ?? throw new InvalidOperationException(
+                $"The commit {recorded[..8]} that this push records for {p} isn't on any branch in the submodule (it was made on a detached HEAD). " +
+                $"Open {p} in GitForge, create a branch at that commit, and push again.");
+
+        var upstreamRemote = (await ctx.RunAsync(["-C", p, "config", "--get", $"branch.{branch}.remote"], ct, okCodes: [0, 1]).ConfigureAwait(false)).StandardOutput.Trim();
+        var upstreamRef = (await ctx.RunAsync(["-C", p, "config", "--get", $"branch.{branch}.merge"], ct, okCodes: [0, 1]).ConfigureAwait(false)).StandardOutput.Trim();
+        var remotes = (await ctx.RunAsync(["-C", p, "remote"], ct).ConfigureAwait(false)).EnsureSuccess("remote").StandardOutput
+            .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var hasUpstream = upstreamRemote.Length > 0 && upstreamRemote != "." && upstreamRef.StartsWith("refs/heads/", StringComparison.Ordinal);
+        var remote = hasUpstream ? upstreamRemote
+            : remotes.Contains("origin") ? "origin"
+            : remotes.FirstOrDefault() ?? throw new InvalidOperationException($"{p} has no remote to push {branch} to.");
+        var target = hasUpstream ? upstreamRef["refs/heads/".Length..] : branch;
+
+        List<string> args = ["-C", p, "push", "--progress"];
+        if (!hasUpstream) args.Add("--set-upstream");
+        args.AddRange([BranchOperations.Guard(remote), $"refs/heads/{BranchOperations.Guard(branch)}:refs/heads/{BranchOperations.Guard(target)}"]);
+        await ctx.WriteAsync($"push {p}", args, ct, progress: progress).ConfigureAwait(false);
+        return $"{remote}/{target}";
+    }
+
+    public Task AddAsync(string url, string path, string? branch, IProgress<string>? progress, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(url)) throw new ArgumentException("Enter the URL of the repository to add.", nameof(url));
+        var args = new List<string> { "submodule", "add" };
+        if (!string.IsNullOrWhiteSpace(branch)) args.AddRange(["-b", BranchOperations.Valid(branch.Trim())]);
+        args.AddRange(["--", url.Trim(), RepoContext.RelativePath(path)]);
+        return ctx.WriteAsync("submodule add", args, cancellationToken, progress: progress);
+    }
+
+    public async Task RemoveAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var p = RepoContext.RelativePath(path);
+        await ctx.WriteAsync("submodule deinit", ["--literal-pathspecs", "submodule", "deinit", "-f", "--", p], cancellationToken).ConfigureAwait(false);
+        await ctx.WriteAsync("remove submodule", ["--literal-pathspecs", "rm", "-f", "-q", "--", p], cancellationToken).ConfigureAwait(false);
+    }
 
     internal readonly record struct Gitlink(string Path, string Sha, bool Conflicted);
 

@@ -68,4 +68,23 @@ internal sealed class RepoContext(string workDir, string gitDir, IGitCli cli, Li
     public static string PathspecPayload(IEnumerable<string> paths) => string.Join('\0', paths) + "\0";
 
     public static readonly string[] PathspecFromStdin = ["--pathspec-from-file=-", "--pathspec-file-nul"];
+
+    /// <summary>Untranslated git messages, for commands whose output GitForge parses.</summary>
+    public static readonly IReadOnlyDictionary<string, string> EnglishMessages = new Dictionary<string, string> { ["LC_ALL"] = "C" };
+
+    /// <summary>
+    /// A path inside the working tree for git commands: forward slashes, relative, no ".." segments, and not starting with
+    /// "-" (so it can never be read as an option). Throws for anything else.
+    /// </summary>
+    public static string RelativePath(string path)
+    {
+        var p = path.Trim().Replace('\\', '/').Trim('/');
+        if (p.Length == 0 || p.StartsWith('-') || Path.IsPathRooted(p) || p.Contains(':', StringComparison.Ordinal)
+            || p.Split('/').Any(s => s is ".." or "." or ""))
+        {
+            throw new ArgumentException($"'{path}' must be a folder inside the repository, such as libs/name.", nameof(path));
+        }
+
+        return p;
+    }
 }

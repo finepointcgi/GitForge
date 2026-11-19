@@ -127,7 +127,7 @@ kbd { font-family: var(--gf-mono); font-size: 10.5px; padding: 1px 5px; border: 
 .gf-side-title { display: flex; align-items: center; gap: 4px; width: 100%; padding: 6px 10px; font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--gf-dim); }
 .gf-side-toggle { border: 0; background: transparent; cursor: pointer; font-family: inherit; text-align: left; }
 .gf-side-toggle:hover { color: var(--gf-text); }
-.gf-side-actions { padding: 0 14px 4px; }
+.gf-side-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; padding: 0 14px 4px; }
 .gf-folder { display: flex; align-items: center; gap: 4px; width: 100%; height: 26px; padding: 0 10px 0 14px; border: 0; background: transparent; color: var(--gf-dim); font: inherit; cursor: pointer; text-align: left; }
 .gf-folder:hover { background: var(--gf-hover); color: var(--gf-text); }
 .gf-folder.nested { padding-left: 34px; }
@@ -263,6 +263,7 @@ textarea.gf-input { height: auto; font-family: inherit; }
 .gf-pill.behind { color: var(--gf-mod); }
 .gf-pill.gone { color: var(--gf-del); }
 .gf-pill.remote-gone { color: var(--gf-mod); cursor: help; }
+.gf-pill.worktree { color: var(--gf-accent); cursor: help; }
 .gf-gone-note { display: flex; align-items: center; gap: 6px; width: calc(100% - 12px); margin: 2px 6px 6px; padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--gf-mod) 55%, transparent); border-radius: var(--gf-radius); background: color-mix(in srgb, var(--gf-mod) 14%, var(--gf-bg-1)); color: var(--gf-text); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; }
 .gf-gone-note .mud-icon-root { color: var(--gf-mod); }
 .gf-gone-note:hover { background: color-mix(in srgb, var(--gf-mod) 24%, var(--gf-bg-1)); }
@@ -443,3 +444,21 @@ textarea.gf-input { height: auto; font-family: inherit; }
 .gf-shortcuts tr.changed td:first-child { font-weight: 600; }
 .gf-shortcuts-filter { margin-bottom: 8px; }
 .gf-shortcuts-scroll { max-height: 60vh; overflow: auto; }
+
+/* ---------- Right-click menus opened from code (one per list) ---------- */
+.gf-context-host { position: absolute !important; width: 0; height: 0; overflow: hidden; }
+
+/* ---------- Detached HEAD warning (commit panel) ---------- */
+.gf-detached-warning { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--gf-mod) 55%, transparent); border-radius: var(--gf-radius); background: color-mix(in srgb, var(--gf-mod) 12%, var(--gf-bg-1)); font-size: 12px; line-height: 1.45; }
+.gf-detached-warning > .mud-icon-root { color: var(--gf-mod); margin-top: 1px; }
+.gf-detached-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+
+/* ---------- Submodule pointer changes (diff pane) ---------- */
+.gf-submodule-diff { display: grid; align-content: start; gap: 6px; padding: 16px 20px; overflow: auto; min-height: 0; }
+.gf-submodule-diff-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+.gf-submodule-diff-line { font-size: 13px; }
+.gf-submodule-commit { font-size: 12px; padding: 1px 0; }
+.gf-submodule-diff-actions { margin-top: 8px; }
+
+/* ---------- Bisect banner ---------- */
+.gf-banner.gf-banner-bisect { background: color-mix(in srgb, var(--gf-accent) 14%, var(--gf-bg-1)); }

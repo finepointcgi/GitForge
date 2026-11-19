@@ -1,7 +1,41 @@
 @implements IDisposable
 @inject RepoWorkspace W
 
-@if (W.Snapshot is { Operation: not RepositoryOperation.None } s)
+@if (W.Snapshot is { Operation: RepositoryOperation.Bisect })
+{
+    var b = W.Bisect;
+    <div class="gf-banner gf-banner-bisect" role="status">
+        <MudIcon Icon="@Icons.Material.Outlined.ManageSearch" Size="Size.Small" />
+        @if (b.FirstBad is { } found)
+        {
+            <span><strong>Bisect found it:</strong> <button class="gf-sha-link" @onclick="@(() => W.SelectCommit(found, reveal: true))">@found[..8]</button> is the first bad commit. End the bisect to go back to your branch.</span>
+        }
+        else if (b.NeedsGood)
+        {
+            <span><strong>Bisect started.</strong> Now find a commit where it worked: right-click it in the graph › Bisect › Mark good.</span>
+        }
+        else if (b.NeedsBad)
+        {
+            <span><strong>Bisect started.</strong> Now find a commit with the bug: right-click it in the graph › Bisect › Mark bad.</span>
+        }
+        else
+        {
+            <span>
+                <strong>Bisect:</strong> test the checked-out commit (<span class="gf-mono">@(W.Snapshot?.HeadSha?[..8])</span>), then mark it.
+                @(b.Remaining is > 0 and var left ? $"About {left} commit{(left == 1 ? null : "s")} left to test, roughly {b.StepsLeft} more step{(b.StepsLeft == 1 ? null : "s")}." : null)
+            </span>
+        }
+        <span class="gf-spacer"></span>
+        @if (b.FirstBad is null && !b.NeedsGood && !b.NeedsBad)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" Disabled="@W.IsBusy" OnClick="@(() => W.MarkBisectAsync(BisectMark.Good))">Good</MudButton>
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" Disabled="@W.IsBusy" OnClick="@(() => W.MarkBisectAsync(BisectMark.Bad))">Bad</MudButton>
+            <MudButton Size="Size.Small" Variant="Variant.Outlined" Disabled="@W.IsBusy" OnClick="@(() => W.MarkBisectAsync(BisectMark.Skip))">Skip</MudButton>
+        }
+        <MudButton Size="Size.Small" Variant="Variant.Outlined" Disabled="@W.IsBusy" OnClick="W.ResetBisectAsync">End bisect</MudButton>
+    </div>
+}
+else if (W.Snapshot is { Operation: not RepositoryOperation.None } s)
 {
     <div class="gf-banner" role="status">
         <MudIcon Icon="@Icons.Material.Outlined.WarningAmber" Size="Size.Small" />
@@ -9,7 +43,7 @@
             @(W.Status.Conflicted.Count > 0 ? $"{W.Status.Conflicted.Count} conflicted file(s) — resolve them, then continue." : "No conflicts remain — continue when ready.")</span>
         <span class="gf-spacer"></span>
         <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Disabled="@(W.Status.Conflicted.Count > 0)" OnClick="@(() => Run("Continuing", r => r.History.ContinueAsync()))">Continue</MudButton>
-        @if (s.Operation is RepositoryOperation.Rebase or RepositoryOperation.RebaseInteractive or RepositoryOperation.CherryPick or RepositoryOperation.Revert)
+        @if (s.Operation is RepositoryOperation.Rebase or RepositoryOperation.RebaseInteractive or RepositoryOperation.CherryPick or RepositoryOperation.Revert or RepositoryOperation.ApplyMailbox)
         {
             <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => Run("Skipping", r => r.History.SkipAsync()))">Skip</MudButton>
         }
@@ -30,7 +64,7 @@
         RepositoryOperation.CherryPick => "Cherry-pick",
         RepositoryOperation.Revert => "Revert",
         RepositoryOperation.Bisect => "Bisect",
-        RepositoryOperation.ApplyMailbox => "git am",
+        RepositoryOperation.ApplyMailbox => "Applying patches (git am)",
         _ => op.ToString(),
     };
 

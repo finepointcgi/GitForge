@@ -34,7 +34,15 @@ public sealed record AppSettings
     public string? GitExecutablePath { get; init; }
     public string? DefaultCloneDirectory { get; init; }
     public string? ExternalMergeTool { get; init; }
+
+    /// <summary>Tool for <c>git difftool --tool</c>; null uses git's <c>diff.tool</c> (or <c>merge.tool</c>) setting.</summary>
     public string? ExternalDiffTool { get; init; }
+
+    /// <summary>Terminal command; <c>{path}</c> is replaced with the folder. Null = Windows Terminal, else Git Bash, else PowerShell.</summary>
+    public string? TerminalCommand { get; init; }
+
+    /// <summary>Editor command; <c>{path}</c> is replaced with the file or folder. Null = Visual Studio Code if installed.</summary>
+    public string? EditorCommand { get; init; }
     public bool FetchOnOpen { get; init; } = true;
 
     /// <summary>Keep submodules in step with HEAD automatically (recursive init/sync/update; dirty submodules are skipped).</summary>

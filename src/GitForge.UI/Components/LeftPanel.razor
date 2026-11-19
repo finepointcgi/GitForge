@@ -40,6 +40,7 @@
                     @foreach (var b in group)
                     {
                         var hidden = W.HiddenRefs.Contains(b.CanonicalName);
+                        var held = W.WorktreeHolding(b.Name);
                         <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
                             <ActivatorContent Context="menu">
                                 <div class="gf-ref-row @(b.IsCurrent ? "current" : null) @(hidden ? "hidden-ref" : null) @(group.Key is null ? null : "nested") @(W.SoloRef == b.CanonicalName ? "solo" : null) @(_dropOn == b.CanonicalName ? "drop-target" : null)"
@@ -53,6 +54,7 @@
                                     @if (b.Ahead > 0) { <span class="gf-pill ahead" title="Commits to push">↑@b.Ahead</span> }
                                     @if (b.Behind > 0) { <span class="gf-pill behind" title="Commits to pull">↓@b.Behind</span> }
                                     @if (b.IsUpstreamGone) { <span class="gf-pill remote-gone" title="@GoneTip(b)">remote deleted</span> }
+                                    @if (held is not null) { <span class="gf-pill worktree" title="@($"Checked out in the worktree {held.Path}. Double-click to open it.")">worktree</span> }
                                     <button class="gf-eye" title="@(hidden ? "Show in graph" : "Hide from graph")" aria-label="@(hidden ? "Show branch" : "Hide branch")"
                                             @onclick:stopPropagation="true" @onclick="@(() => W.ToggleHiddenAsync(b.CanonicalName))">
                                         <MudIcon Icon="@(hidden ? Icons.Material.Outlined.VisibilityOff : Icons.Material.Outlined.Visibility)" Size="Size.Small" />
@@ -60,7 +62,15 @@
                                 </div>
                             </ActivatorContent>
                             <ChildContent>
-                                <MudMenuItem Disabled="@b.IsCurrent" OnClick="@(() => Checkout(b))">Checkout @b.Name</MudMenuItem>
+                                @if (held is not null)
+                                {
+                                    <MudMenuItem OnClick="@(() => W.OpenAsync(held.Path))">Open its worktree (@held.Name)</MudMenuItem>
+                                }
+                                else
+                                {
+                                    <MudMenuItem Disabled="@b.IsCurrent" OnClick="@(() => Checkout(b))">Checkout @b.Name</MudMenuItem>
+                                    <MudMenuItem Disabled="@b.IsCurrent" OnClick="@(() => NewWorktree(b.Name))">Check out in a new worktree…</MudMenuItem>
+                                }
                                 <MudMenuItem Disabled="@b.IsCurrent" OnClick="@(() => Merge(b.Name))">Merge @b.Name into @W.CurrentBranch</MudMenuItem>
                                 <MudMenuItem Disabled="@b.IsCurrent" OnClick="@(() => Rebase(b.Name))">Rebase @W.CurrentBranch onto @b.Name</MudMenuItem>
                                 <MudDivider />
@@ -276,8 +286,14 @@
         {
             <SideSection Title="Submodules" Count="SubmoduleRows.Count" @bind-Expanded="_submodulesOpen">
                 <div class="gf-side-actions">
-                    <button class="gf-link-button" @onclick="W.UpdateSubmodulesAsync" title="git submodule sync + update --init --recursive (skips submodules with local changes)">
-                        <MudIcon Icon="@Icons.Material.Outlined.Sync" Size="Size.Small" /> Update all (recursive)
+                    <button class="gf-link-button" @onclick="W.UpdateSubmodulesAsync" title="Put every submodule at the commit this branch records (git submodule sync + update --init --recursive). Skips submodules with local changes.">
+                        <MudIcon Icon="@Icons.Material.Outlined.Sync" Size="Size.Small" /> Update all
+                    </button>
+                    <button class="gf-link-button" @onclick="@(() => W.UpdateSubmodulesToRemoteAsync())" title="Move every submodule to the newest commit on the branch it tracks (git submodule update --remote), ready to commit. Skips submodules with local changes.">
+                        <MudIcon Icon="@Icons.Material.Outlined.CloudDownload" Size="Size.Small" /> Newest
+                    </button>
+                    <button class="gf-link-button" @onclick="@(() => Shortcuts.RaiseAsync("submodule.add"))" title="Add a submodule">
+                        <MudIcon Icon="@Icons.Material.Outlined.Add" Size="Size.Small" /> Add
                     </button>
                     @if (W.Settings.AutoUpdateSubmodules)
                     {
@@ -303,9 +319,60 @@
                             </div>
                         </ActivatorContent>
                         <ChildContent>
-                            <MudMenuItem Disabled="@(!top)" OnClick="@(() => W.UpdateSubmoduleAsync(row.Path))">Update @row.Name (recursive)</MudMenuItem>
+                            <MudMenuItem Disabled="@(row.State == SubmoduleSyncState.Conflicted)" OnClick="@(() => W.UpdateSubmoduleAsync(row.Path))">Update to the recorded commit (recursive)</MudMenuItem>
+                            @if (top)
+                            {
+                                <MudMenuItem Disabled="@row.Dirty" OnClick="@(() => W.UpdateSubmodulesToRemoteAsync([row.Path]))">Update to the newest remote commit</MudMenuItem>
+                            }
+                            <MudDivider />
                             <MudMenuItem OnClick="@(() => W.OpenAsync(Path.Combine(s.WorkingDirectory, row.Path)))">Open in GitForge</MudMenuItem>
                             <MudMenuItem OnClick="@(() => Shell.RevealInFileManager(Path.Combine(s.WorkingDirectory, row.Path)))">Show in Explorer</MudMenuItem>
+                            <MudMenuItem OnClick="@(() => W.OpenTerminal(Path.Combine(s.WorkingDirectory, row.Path)))">Open terminal here</MudMenuItem>
+                            @if (top)
+                            {
+                                <MudDivider />
+                                <MudMenuItem OnClick="@(() => RemoveSubmodule(row))"><span class="gf-danger">Remove submodule…</span></MudMenuItem>
+                            }
+                        </ChildContent>
+                    </MudMenu>
+                }
+            </SideSection>
+        }
+
+        @if (W.Worktrees.Count > 0)
+        {
+            <SideSection Title="Worktrees" Count="W.Worktrees.Count" @bind-Expanded="_worktreesOpen">
+                <div class="gf-side-actions">
+                    <button class="gf-link-button" @onclick="@(() => Shortcuts.RaiseAsync("worktree.add"))" title="Check out a branch in another folder">
+                        <MudIcon Icon="@Icons.Material.Outlined.Add" Size="Size.Small" /> New worktree
+                    </button>
+                    @if (W.Worktrees.Any(w => w.IsPrunable))
+                    {
+                        <button class="gf-link-button" @onclick="W.PruneWorktreesAsync" title="Forget worktrees whose folders were deleted (git worktree prune)">Prune</button>
+                    }
+                </div>
+                @foreach (var wt in W.Worktrees.Where(w => !w.IsBare))
+                {
+                    <MudMenu ActivationEvent="@MouseEvent.RightClick" PositionAtCursor="true" Dense="true" FullWidth="true">
+                        <ActivatorContent Context="menu">
+                            <div class="gf-ref-row @(wt.IsCurrent ? "current" : null)" title="@($"{wt.Path}{(wt.IsLocked ? $"\nLocked{(wt.LockReason is { } why ? $": {why}" : null)}" : null)}{(wt.IsPrunable ? "\nIts folder is missing" : null)}\nDouble-click to open")"
+                                 @oncontextmenu="@(e => menu.OpenAsync(e))" @ondblclick="@(() => OpenWorktree(wt))">
+                                <MudIcon Icon="@(wt.IsCurrent ? Icons.Material.Filled.CheckCircle : Icons.Material.Outlined.AccountTree)" Size="Size.Small" Class="@(wt.IsCurrent ? "gf-current-icon" : "gf-dim")" />
+                                <span class="gf-ellipsis gf-grow">@wt.Name</span>
+                                <span class="gf-dim gf-small gf-ellipsis">@(wt.Branch ?? (wt.HeadSha is { Length: >= 7 } h ? $"detached {h[..7]}" : "detached"))</span>
+                                @if (wt.IsMain) { <span class="gf-pill" title="The main worktree (where the repository was cloned)">main</span> }
+                                @if (wt.IsPrunable) { <span class="gf-pill gone" title="The folder was deleted">missing</span> }
+                            </div>
+                        </ActivatorContent>
+                        <ChildContent>
+                            <MudMenuItem Disabled="@(wt.IsCurrent || wt.IsPrunable)" OnClick="@(() => OpenWorktree(wt))">Open in GitForge</MudMenuItem>
+                            <MudMenuItem Disabled="@wt.IsPrunable" OnClick="@(() => Shell.RevealInFileManager(wt.Path))">Show in Explorer</MudMenuItem>
+                            <MudMenuItem Disabled="@wt.IsPrunable" OnClick="@(() => W.OpenTerminal(wt.Path))">Open terminal here</MudMenuItem>
+                            @if (!wt.IsMain && !wt.IsCurrent)
+                            {
+                                <MudDivider />
+                                <MudMenuItem OnClick="@(() => RemoveWorktree(wt))"><span class="gf-danger">Remove worktree…</span></MudMenuItem>
+                            }
                         </ChildContent>
                     </MudMenu>
                 }
@@ -321,7 +388,7 @@
 @code {
     private string _filter = string.Empty;
     private string? _dropOn; // local branch under a dragged branch
-    private bool _localOpen = true, _remoteOpen = true, _prsOpen = true, _tagsOpen, _stashesOpen = true, _submodulesOpen = true, _lfsOpen = true;
+    private bool _localOpen = true, _remoteOpen = true, _prsOpen = true, _tagsOpen, _stashesOpen = true, _submodulesOpen = true, _lfsOpen = true, _worktreesOpen = true;
     private IReadOnlyList<HostedPullRequest>? _prs;
     private HostingAccount? _prAccount;
     private string? _prsLoadedFor;
@@ -443,7 +510,41 @@
         return BranchDragDrop.DropAsync(W, Dialogs, b);
     }
 
-    private Task Checkout(BranchHead b) => b.IsCurrent ? Task.CompletedTask : W.CheckoutAsync(b.Name);
+    private Task Checkout(BranchHead b) =>
+        b.IsCurrent ? Task.CompletedTask
+        : W.WorktreeHolding(b.Name) is { } held ? W.OpenAsync(held.Path) // git won't check a branch out twice; go to where it is
+        : W.CheckoutAsync(b.Name);
+
+    private async Task NewWorktree(string branch)
+    {
+        var parameters = new DialogParameters<WorktreeDialog> { { d => d.Branch, branch } };
+        var dialog = await Dialogs.ShowAsync<WorktreeDialog>("New worktree", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true });
+        await dialog.Result;
+    }
+
+    private Task OpenWorktree(WorktreeInfo wt) => wt.IsCurrent || wt.IsPrunable ? Task.CompletedTask : W.OpenAsync(wt.Path);
+
+    private async Task RemoveWorktree(WorktreeInfo wt)
+    {
+        var result = await Dialogs.ShowMessageBoxAsync("Remove worktree",
+            $"Remove the worktree {wt.Path}? Its folder is deleted; {(wt.Branch is { } b ? $"the branch {b} and its commits stay" : "commits stay")} in the repository. Git refuses if it has uncommitted changes, unless you force it.",
+            yesText: "Remove", noText: "Force remove (discard its changes)", cancelText: "Cancel");
+        if (result is not null) await W.RemoveWorktreeAsync(wt, force: result == false);
+    }
+
+    private async Task RemoveSubmodule(SubmoduleRow row)
+    {
+        if (row.Dirty)
+        {
+            W.Info($"{row.Path} has uncommitted changes. Commit (and push) or discard them inside it before removing it.", Severity.Warning);
+            return;
+        }
+
+        if (await Confirm("Remove submodule", $"Remove the submodule {row.Path}? Its folder is deleted and its removal (with its .gitmodules entry) is staged; commit to finish. Its git data stays in .git/modules, so commits made in it aren't lost.", "Remove"))
+        {
+            await W.RemoveSubmoduleAsync(row.Path);
+        }
+    }
 
     private Task CheckoutRemote(BranchHead b)
     {
@@ -476,7 +577,7 @@
         // A deleted upstream is recreated under its old name (it may differ from the local name) and re-linked.
         var remoteBranch = b.IsUpstreamGone && b.UpstreamName is { } up && up.StartsWith(remote + "/", StringComparison.Ordinal) ? up[(remote.Length + 1)..] : null;
         var request = new PushRequest(remote, b.Name, remoteBranch, SetUpstream: !b.HasUpstream || b.IsUpstreamGone);
-        return W.RunAsync($"Pushing {b.Name}", (r, p) => r.Remotes.PushAsync(request, p), $"Pushed {b.Name}");
+        return W.PushCheckedAsync(request, $"Pushing {b.Name}", $"Pushed {b.Name}");
     }
 
     private Task StopTracking(BranchHead b) =>

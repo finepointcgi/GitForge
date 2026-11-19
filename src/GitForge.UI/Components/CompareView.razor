@@ -1,6 +1,8 @@
 @implements IDisposable
 @inject RepoWorkspace W
 
+<FileContextMenu @ref="_fileMenu" />
+
 @* Direct comparison of two revisions (git diff A B), or of one revision and the working tree. Lists the commits
    reachable from the newer side only, then every file that differs. *@
 <div class="gf-fileview">
@@ -60,7 +62,7 @@
                     <div class="gf-group-head"><span class="gf-group-title">Files</span><span class="gf-count">@_files.Count</span></div>
                     @foreach (var f in _files.Take(2000))
                     {
-                        <FileChangeRow Change="f" Selected="@(f == _file)" OnClick="@(() => SelectFileAsync(f))" />
+                        <FileChangeRow Change="f" Selected="@(f == _file)" OnClick="@(() => SelectFileAsync(f))" OnContextMenu="@(e => _fileMenu!.OpenAsync(e, FileMenuTarget.ForCompare(_from!, _to, f)))" />
                     }
                     @if (_files.Count == 0)
                     {
@@ -77,6 +79,7 @@
 </div>
 
 @code {
+    private FileContextMenu? _fileMenu;
     private string _from = string.Empty;
     private string? _to;
     private readonly List<CommitInfo> _commits = [];

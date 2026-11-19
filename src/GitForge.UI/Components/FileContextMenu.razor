@@ -1,0 +1,161 @@
+@using GitForge.Git.Undo
+@inject RepoWorkspace W
+@inject IDialogService Dialogs
+@inject IJSRuntime JS
+
+@* One menu per file list, opened at the cursor for the row that was right-clicked (lists can hold thousands of rows). *@
+<MudMenu @ref="_menu" PositionAtCursor="true" Dense="true" Class="gf-context-host">
+    <ActivatorContent></ActivatorContent>
+    <ChildContent>
+        @if (_target is { } t)
+        {
+            var submodule = W.SubmoduleAt(t.Path);
+            var inWorkingCopy = t.Kind != FileChangeKind.Deleted && W.Repo is { } repo && File.Exists(System.IO.Path.Combine(repo.WorkingDirectory, t.Path));
+            @if (t.Area is { } area)
+            {
+                @if (t.Kind == FileChangeKind.Conflicted)
+                {
+                    <MudMenuItem Icon="@Icons.Material.Outlined.Person" OnClick="@(() => Resolve(t, ConflictSide.Ours))">Resolve using mine</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Outlined.People" OnClick="@(() => Resolve(t, ConflictSide.Theirs))">Resolve using theirs</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Outlined.MergeType" OnClick="@(() => MergeTool(t))">Open merge tool@(W.Settings.ExternalMergeTool is { Length: > 0 } tool ? $" ({tool})" : null)</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Outlined.Check" OnClick="@(() => W.RunAsync("Marking resolved", (r, _) => r.Index.MarkResolvedAsync(t.Path)))">Mark resolved</MudMenuItem>
+                }
+                else if (area == StagingArea.Unstaged)
+                {
+                    <MudMenuItem Icon="@Icons.Material.Outlined.Add" OnClick="@(() => W.RunAsync("Staging", (r, _) => r.Index.StageAsync([t.Path])))">Stage</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Outlined.SettingsBackupRestore" OnClick="@(() => Discard(t))"><span class="gf-danger">@(submodule is null ? "Discard changes…" : "Reset submodule to the recorded commit")</span></MudMenuItem>
+                }
+                else
+                {
+                    <MudMenuItem Icon="@Icons.Material.Outlined.Remove" OnClick="@(() => W.RunAsync("Unstaging", (r, _) => r.Index.UnstageAsync(t.OldPath is null ? [t.Path] : [t.Path, t.OldPath])))">Unstage</MudMenuItem>
+                }
+                <MudDivider />
+            }
+            @if (submodule is not null)
+            {
+                <MudMenuItem Icon="@Icons.Material.Outlined.Extension" OnClick="@(() => W.OpenAsync(System.IO.Path.Combine(W.Repo!.WorkingDirectory, t.Path)))">Open submodule in GitForge</MudMenuItem>
+                <MudMenuItem Icon="@Icons.Material.Outlined.Sync" OnClick="@(() => W.UpdateSubmoduleAsync(t.Path))">Update submodule to the recorded commit</MudMenuItem>
+            }
+            else
+            {
+                <MudMenuItem Icon="@Icons.Material.Outlined.OpenInNew" Disabled="@(!inWorkingCopy)" OnClick="@(() => W.OpenFile(t.Path))">Open</MudMenuItem>
+                <MudMenuItem Icon="@Icons.Material.Outlined.Code" Disabled="@(!inWorkingCopy)" OnClick="@(() => W.OpenInEditor(t.Path))">Open in editor</MudMenuItem>
+            }
+            <MudMenuItem Icon="@Icons.Material.Outlined.FolderOpen" Disabled="@(!inWorkingCopy && submodule is null)" OnClick="@(() => W.RevealInExplorer(t.Path))">Show in Explorer</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Outlined.ContentCopy" OnClick="@(() => Copy(t.Path, full: false))">Copy path</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Outlined.ContentCopy" OnClick="@(() => Copy(t.Path, full: true))">Copy full path</MudMenuItem>
+            @if (submodule is null)
+            {
+                <MudDivider />
+                <MudMenuItem Icon="@Icons.Material.Outlined.Difference" Disabled="@(!CanDiff(t))" OnClick="@(() => ExternalDiff(t))">Open in diff tool@(W.Settings.ExternalDiffTool is { Length: > 0 } dt ? $" ({dt})" : null)</MudMenuItem>
+                @if (HasHistory(t))
+                {
+                    <MudMenuItem Icon="@Icons.Material.Outlined.History" OnClick="@(() => W.ShowFileHistory(t.Path))">File history</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Outlined.PersonSearch" OnClick="@(() => W.ShowBlame(t.Path, t.CommitSha))">@(t.CommitSha is null ? "Blame" : "Blame as of this commit")</MudMenuItem>
+                }
+            }
+            @if (t.Area is not null && t.Kind == FileChangeKind.Untracked)
+            {
+                <MudDivider />
+                <MudMenu Label="Add to .gitignore" StartIcon="@Icons.Material.Outlined.VisibilityOff" Dense="true">
+                    @foreach (var pattern in IgnorePatterns(t.Path))
+                    {
+                        <MudMenuItem OnClick="@(() => W.AddToGitignoreAsync(pattern.Pattern))">@pattern.Label <span class="gf-mono gf-dim">@pattern.Pattern</span></MudMenuItem>
+                    }
+                </MudMenu>
+            }
+            else if (t.Area is not null && submodule is null && t.Kind is FileChangeKind.Modified or FileChangeKind.TypeChanged or FileChangeKind.Renamed)
+            {
+                <MudDivider />
+                <MudMenuItem Icon="@Icons.Material.Outlined.VisibilityOff" OnClick="@(() => StopTracking(t))">Stop tracking (keep the file)…</MudMenuItem>
+            }
+            @if (t.CommitSha is { } sha && t.Kind != FileChangeKind.Deleted && submodule is null)
+            {
+                <MudDivider />
+                <MudMenuItem Icon="@Icons.Material.Outlined.Restore" OnClick="@(() => Restore(t, sha))">Restore this version to the working copy…</MudMenuItem>
+            }
+        }
+    </ChildContent>
+</MudMenu>
+
+@code {
+    private MudMenu? _menu;
+    private FileMenuTarget? _target;
+
+    /// <summary>Opens the menu at the mouse for <paramref name="target"/>.</summary>
+    public async Task OpenAsync(MouseEventArgs e, FileMenuTarget target)
+    {
+        _target = target;
+        StateHasChanged();
+        if (_menu is not null) await _menu.OpenMenuAsync(e);
+    }
+
+    private static bool CanDiff(FileMenuTarget t) => t.Kind is not (FileChangeKind.Untracked or FileChangeKind.Conflicted);
+
+    // History and blame need a file that exists in history (not new, deleted, or conflicted in the working copy).
+    private static bool HasHistory(FileMenuTarget t) =>
+        t.Area is null ? t.Kind != FileChangeKind.Deleted : t.Kind is not (FileChangeKind.Untracked or FileChangeKind.Added or FileChangeKind.Conflicted or FileChangeKind.Deleted);
+
+    private Task ExternalDiff(FileMenuTarget t) => W.OpenDiffToolAsync(new DiffToolTarget(t.Path, t.OldPath, t.Area == StagingArea.Staged, t.CommitSha, t.From, t.To));
+
+    /// <summary>.gitignore choices for a new file: the file itself, its extension, and its folder (anchored at the repository root).</summary>
+    internal static IEnumerable<(string Label, string Pattern)> IgnorePatterns(string path)
+    {
+        var p = path.Replace('\\', '/').TrimEnd('/');
+        yield return ("This file", "/" + p);
+        if (System.IO.Path.GetExtension(p) is { Length: > 1 } ext) yield return ($"All {ext} files", "*" + ext);
+        if (p.LastIndexOf('/') is var slash && slash > 0) yield return ("Its folder", "/" + p[..(slash + 1)]);
+    }
+
+    private async Task Copy(string path, bool full)
+    {
+        var text = full && W.Repo is { } repo ? System.IO.Path.GetFullPath(System.IO.Path.Combine(repo.WorkingDirectory, path)) : path;
+        await JS.InvokeVoidAsync("gitforge.copyText", text);
+        W.Info($"Copied {text}");
+    }
+
+    private Task Resolve(FileMenuTarget t, ConflictSide side) =>
+        W.RunAsync($"Resolving {t.Path} using {(side == ConflictSide.Ours ? "mine" : "theirs")}", (r, _) => r.Index.ResolveConflictAsync(t.Path, side));
+
+    private Task MergeTool(FileMenuTarget t) => W.RunAsync("Waiting for merge tool", async (r, _) =>
+        (await r.Index.LaunchMergeToolAsync(t.Path, W.Settings.ExternalMergeTool)).EnsureSuccess("mergetool"));
+
+    private async Task Discard(FileMenuTarget t)
+    {
+        if (W.SubmoduleAt(t.Path) is { } sm)
+        {
+            if (sm.State.HasFlag(SubmoduleState.WorkDirDirty))
+            {
+                W.Info($"{t.Path} has uncommitted changes inside it. Commit or stash them there first.", Severity.Warning);
+                return;
+            }
+
+            await W.UpdateSubmoduleAsync(t.Path);
+            return;
+        }
+
+        var entry = W.Status.Unstaged.FirstOrDefault(f => f.Path == t.Path);
+        if (entry is null) return;
+        var question = entry.Kind == FileChangeKind.Untracked
+            ? $"Delete the new file '{entry.Path}'? {Keymap.UndoName(W.Settings)} restores it until your next action."
+            : $"Discard all changes to '{entry.Path}'? {Keymap.UndoName(W.Settings)} restores them until your next action.";
+        if (await Dialogs.ShowMessageBoxAsync("Discard changes", question, yesText: "Discard", cancelText: "Cancel") != true) return;
+        await W.RunUndoableAsync("Discarding", r => UndoableOperations.DiscardAsync(r, () => r.Index.DiscardAsync([entry]), [entry.Path]));
+    }
+
+    private async Task StopTracking(FileMenuTarget t)
+    {
+        if (await Dialogs.ShowMessageBoxAsync("Stop tracking", $"Stop tracking '{t.Path}'? Git records it as deleted in your next commit, but the file stays on your disk (with your changes). Add it to .gitignore so it isn't added again.", yesText: "Stop tracking", cancelText: "Cancel") == true)
+        {
+            await W.StopTrackingAsync(t.Path);
+        }
+    }
+
+    private async Task Restore(FileMenuTarget t, string sha)
+    {
+        if (await Dialogs.ShowMessageBoxAsync("Restore file", $"Replace '{t.Path}' in your working copy with its version from {sha[..7]}? Uncommitted changes to it are lost. The result is staged.", yesText: "Restore", cancelText: "Cancel") == true)
+        {
+            await W.RestoreFileAsync(sha, t.Path);
+        }
+    }
+}

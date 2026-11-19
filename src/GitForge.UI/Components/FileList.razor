@@ -10,6 +10,7 @@
         @foreach (var f in Files)
         {
             <div class="gf-file-row @(IsSelected(f) ? "selected" : null)" @onclick="@(() => OnSelect.InvokeAsync(f))"
+                 @oncontextmenu="@(e => OnContextMenu.InvokeAsync((e, f)))" @oncontextmenu:preventDefault="true"
                  title="@(f.OldPath is null ? f.Path : $"{f.OldPath} → {f.Path}")">
                 <StatusGlyph Kind="f.Kind" />
                 <span class="gf-ellipsis gf-grow"><span class="gf-filename">@f.FileName</span> <span class="gf-dim">@f.Directory</span></span>
@@ -44,6 +45,9 @@
     [Parameter] public EventCallback<FileStatusEntry> OnStage { get; set; }
     [Parameter] public EventCallback<FileStatusEntry> OnUnstage { get; set; }
     [Parameter] public EventCallback<FileStatusEntry> OnDiscard { get; set; }
+
+    /// <summary>Right-click on a row (the host shows <see cref="FileContextMenu"/>).</summary>
+    [Parameter] public EventCallback<(MouseEventArgs Mouse, FileStatusEntry File)> OnContextMenu { get; set; }
 
     private bool IsSelected(FileStatusEntry f) => Selected is not null && Selected.Path == f.Path && Selected.Area == f.Area && Selected.Kind == f.Kind;
 }

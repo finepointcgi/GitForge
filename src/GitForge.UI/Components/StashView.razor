@@ -2,6 +2,8 @@
 @inject RepoWorkspace W
 @inject IDialogService Dialogs
 
+<FileContextMenu @ref="_fileMenu" />
+
 @* Read-only preview of one stash: its files and diffs, with apply, pop, and drop. Stash commits never change, so
    the contents load once; the header follows the stash list (indexes shift as other stashes come and go). *@
 <div class="gf-fileview">
@@ -42,7 +44,7 @@
                     </div>
                     @foreach (var f in tracked)
                     {
-                        <FileChangeRow Change="f.Change" Selected="@(f == _file)" OnClick="@(() => SelectFileAsync(f))" />
+                        <FileChangeRow Change="f.Change" Selected="@(f == _file)" OnClick="@(() => SelectFileAsync(f))" OnContextMenu="@(e => _fileMenu!.OpenAsync(e, FileMenuTarget.ForCompare(c.BaseSha, c.Sha, f.Change)))" />
                     }
                     @if (tracked.Count == 0)
                     {
@@ -53,7 +55,7 @@
                         <div class="gf-group-head"><span class="gf-group-title">Untracked files</span><span class="gf-count">@untracked.Count</span></div>
                         @foreach (var f in untracked)
                         {
-                            <FileChangeRow Change="f.Change" Selected="@(f == _file)" OnClick="@(() => SelectFileAsync(f))" />
+                            <FileChangeRow Change="f.Change" Selected="@(f == _file)" OnClick="@(() => SelectFileAsync(f))" OnContextMenu="@(e => _fileMenu!.OpenAsync(e, FileMenuTarget.ForCompare(c.BaseSha, c.Sha, f.Change)))" />
                         }
                     }
                 </div>
@@ -67,6 +69,7 @@
 </div>
 
 @code {
+    private FileContextMenu? _fileMenu;
     private string? _sha;
     private StashContents? _contents;
     private StashFile? _file;

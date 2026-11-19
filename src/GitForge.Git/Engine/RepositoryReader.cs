@@ -15,7 +15,46 @@ internal sealed class RepositoryReader(RepoContext ctx) : IRepositoryReader
     private const char FieldSep = '\x1f';
     private const char RecordSep = '\x1e';
 
-    public Task<RepositorySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default) =>
+    public async Task<RepositorySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        var snapshot = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        return snapshot.Remotes.Count > 0 ? snapshot : await WithRemotesFromGitAsync(snapshot, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// libgit2 lists no remotes for a linked worktree (git worktree add) although git uses the main repository's. Read them
+    /// from git instead, and name the remote of each remote-tracking branch, so fetch, pull, and push work in worktree tabs.
+    /// </summary>
+    private async Task<RepositorySnapshot> WithRemotesFromGitAsync(RepositorySnapshot snapshot, CancellationToken ct)
+    {
+        var r = await ctx.RunAsync(["config", "--get-regexp", @"^remote\..*\.(url|pushurl)$"], ct, okCodes: [0, 1]).ConfigureAwait(false);
+        var urls = new Dictionary<string, (string? Url, string? PushUrl)>(StringComparer.Ordinal);
+        foreach (var line in r.StandardOutput.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var space = line.IndexOf(' ', StringComparison.Ordinal);
+            if (space < 0) continue;
+            var key = line[..space];
+            var value = line[(space + 1)..];
+            var dot = key.LastIndexOf('.');
+            var name = key["remote.".Length..dot];
+            var current = urls.GetValueOrDefault(name);
+            urls[name] = key.EndsWith(".pushurl", StringComparison.OrdinalIgnoreCase) ? current with { PushUrl = value } : current with { Url = value };
+        }
+
+        if (urls.Count == 0) return snapshot;
+        var resolver = ctx.Options.SelfHostedResolver;
+        var remotes = urls.Where(u => u.Value.Url is not null)
+            .Select(u => new RemoteInfo(u.Key, u.Value.Url!, u.Value.PushUrl, RemoteUrlParser.Parse(u.Value.Url!, resolver)))
+            .OrderBy(x => x.Name, StringComparer.Ordinal)
+            .ToList();
+        var names = remotes.Select(x => x.Name).OrderByDescending(n => n.Length).ToList(); // longest first: "origin-mirror" before "origin"
+        var branches = snapshot.RemoteBranches
+            .Select(b => b.RemoteName is not null ? b : b with { RemoteName = names.FirstOrDefault(n => b.Name.StartsWith(n + "/", StringComparison.Ordinal)) })
+            .ToList();
+        return snapshot with { Remotes = remotes, RemoteBranches = branches };
+    }
+
+    private Task<RepositorySnapshot> ReadSnapshotAsync(CancellationToken cancellationToken) =>
         ctx.Lib.RunAsync(repo =>
         {
             var info = repo.Info;

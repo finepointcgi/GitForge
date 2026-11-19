@@ -60,6 +60,43 @@ public sealed record SubmoduleUpdateResult(IReadOnlyList<string> Updated, IReadO
     public bool IsEmpty => Updated.Count == 0 && SkippedDirty.Count == 0;
 }
 
+/// <summary>
+/// One working tree of the repository (<c>git worktree list</c>). The main worktree comes first; <see cref="Branch"/> is
+/// null when its HEAD is detached.
+/// </summary>
+public sealed record WorktreeInfo(string Path, string? HeadSha, string? Branch, bool IsMain, bool IsCurrent, bool IsBare, string? LockReason, bool IsLocked, bool IsPrunable)
+{
+    public string Name => System.IO.Path.GetFileName(Path.TrimEnd('/', '\\'));
+}
+
+/// <summary>A submodule's recorded commit moving from <see cref="Old"/> to <see cref="New"/> (null when added or removed); <see cref="Dirty"/> when it has uncommitted changes.</summary>
+public sealed record SubmoduleChange(string? Old, string? New, bool Dirty);
+
+public enum BisectMark
+{
+    Good,
+    Bad,
+    Skip,
+}
+
+/// <summary>
+/// State of a <c>git bisect</c> session: the bad commit, the good ones, how many were skipped, the first bad commit once
+/// found, and roughly how many commits are left to test.
+/// </summary>
+public sealed record BisectStatus(string? Bad, IReadOnlyList<string> Good, int Skipped, string? FirstBad, int? Remaining)
+{
+    public static readonly BisectStatus None = new(null, [], 0, null, null);
+
+    /// <summary>Started with a bad commit; a commit that worked is still needed before testing starts.</summary>
+    public bool NeedsGood => FirstBad is null && Bad is not null && Good.Count == 0;
+
+    /// <summary>A bad commit is still needed (started from "good" first).</summary>
+    public bool NeedsBad => FirstBad is null && Bad is null;
+
+    /// <summary>About how many more test-and-mark steps remain (binary search).</summary>
+    public int? StepsLeft => Remaining is { } n && n > 0 ? (int)Math.Ceiling(Math.Log2(n + 1)) : null;
+}
+
 /// <summary>Operation the repository is in the middle of (drives the conflict/continue banner).</summary>
 public enum RepositoryOperation
 {

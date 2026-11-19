@@ -48,6 +48,12 @@
         {
             <span class="gf-dim gf-grow">@W.OpenDiff?.Path</span>
         }
+        @if (CanExternalDiff)
+        {
+            <MudTooltip Text="@($"Open in diff tool{(W.Settings.ExternalDiffTool is { Length: > 0 } tool ? $" ({tool})" : null)}")">
+                <MudIconButton Icon="@Icons.Material.Outlined.OpenInNew" Size="Size.Small" OnClick="OpenDiffTool" aria-label="Open in diff tool" />
+            </MudTooltip>
+        }
         @if (CanInspect)
         {
             <MudTooltip Text="File history (follows renames)">
@@ -62,6 +68,10 @@
     @if (_file?.Kind == FileChangeKind.Conflicted)
     {
         <ConflictEditor Path="@_file.Path" @key="_file.Path" />
+    }
+    else if (GitOutput.SubmoduleChange(_diff) is { } submodule && _target is { } t)
+    {
+        <SubmoduleDiffCard Path="@t.Path" Change="submodule" @key="(t.Path, submodule)" />
     }
     else
     {
@@ -80,6 +90,14 @@
             || _file is { Kind: not (FileChangeKind.Untracked or FileChangeKind.Added or FileChangeKind.Conflicted or FileChangeKind.Deleted) });
     private FileStatusEntry? _file;
     private FileDiff? _diff;
+
+    private bool CanExternalDiff => W.OpenDiff is { } t && GitOutput.SubmoduleChange(_diff) is null
+        && (t.CommitFile is not null || _file is { Kind: not (FileChangeKind.Untracked or FileChangeKind.Conflicted) });
+
+    private Task OpenDiffTool() => W.OpenDiff is not { } t ? Task.CompletedTask
+        : t.CommitFile is { } cf
+            ? W.OpenDiffToolAsync(new DiffToolTarget(cf.Path, cf.OldPath, CommitSha: t.CommitSha))
+            : _file is { } f ? W.OpenDiffToolAsync(new DiffToolTarget(f.Path, f.OldPath, f.Area == StagingArea.Staged)) : Task.CompletedTask;
 
     // Line stashing mirrors "git stash push --patch": tracked, modified files only, and none of the file may be staged.
     private bool CanStash => _file is { Area: StagingArea.Unstaged, Kind: FileChangeKind.Modified } f && _diff is { IsNewFile: false }
@@ -173,6 +191,14 @@
     private async Task DiscardFile()
     {
         if (_file is not { } f) return;
+        if (W.SubmoduleAt(f.Path) is { } sm)
+        {
+            // A submodule's change is its checked-out commit: "discarding" puts it back at the recorded one.
+            if (sm.State.HasFlag(SubmoduleState.WorkDirDirty)) W.Info($"{f.Path} has uncommitted changes inside it. Commit or stash them there first.", Severity.Warning);
+            else await W.UpdateSubmoduleAsync(f.Path);
+            return;
+        }
+
         var question = f.Kind == FileChangeKind.Untracked
             ? $"Delete the new file '{f.Path}'? {Keymap.UndoName(W.Settings)} restores it until your next action."
             : $"Discard all changes to '{f.Path}'? {Keymap.UndoName(W.Settings)} restores them until your next action.";

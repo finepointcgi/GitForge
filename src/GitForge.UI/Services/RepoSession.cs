@@ -19,6 +19,14 @@ public sealed class RepoSession : IAsyncDisposable
 
     public RepositorySnapshot? Snapshot { get; internal set; }
     public IReadOnlyList<SubmoduleStatusEntry> SubmoduleStatus { get; internal set; } = [];
+
+    /// <summary>Linked worktrees of this repository (empty when it has none besides this one).</summary>
+    public IReadOnlyList<WorktreeInfo> Worktrees { get; internal set; } = [];
+
+    public BisectStatus Bisect { get; internal set; } = BisectStatus.None;
+
+    /// <summary>The first line of git's answer to the last bisect step ("Bisecting: 6 revisions left…").</summary>
+    public string? BisectMessage { get; internal set; }
     public IReadOnlyDictionary<string, IReadOnlyList<RefLabel>> RefIndex { get; internal set; } = new Dictionary<string, IReadOnlyList<RefLabel>>();
     public WorkingCopyStatus Status { get; internal set; } = WorkingCopyStatus.Empty;
     public AppendOnlyList<GraphRow> Rows { get; internal set; } = new();

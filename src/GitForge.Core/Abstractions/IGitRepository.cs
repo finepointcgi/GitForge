@@ -25,6 +25,8 @@ public interface IGitRepository : IAsyncDisposable
     IHistoryOperations History { get; }
     ISubmoduleOperations Submodules { get; }
     ILfsOperations Lfs { get; }
+    IWorktreeOperations Worktrees { get; }
+    ITransferOperations Transfer { get; }
 
     /// <summary>Runs an arbitrary git command in this repository (integrated console). Treated as a write: caches refresh.</summary>
     Task<GitResult> RunRawAsync(IReadOnlyList<string> arguments, IProgress<string>? output = null, CancellationToken cancellationToken = default);
@@ -107,6 +109,12 @@ public interface IIndexOperations
     Task ResolveDeletionAsync(string path, bool keepFile, CancellationToken cancellationToken = default);
     Task MarkResolvedAsync(string path, CancellationToken cancellationToken = default);
     Task<GitResult> LaunchMergeToolAsync(string path, string? tool, CancellationToken cancellationToken = default);
+
+    /// <summary><c>git rm --cached</c>: stops tracking the files (the removal is staged) but leaves them on disk.</summary>
+    Task StopTrackingAsync(IReadOnlyCollection<string> paths, CancellationToken cancellationToken = default);
+
+    /// <summary>Puts <paramref name="path"/> back to its content at <paramref name="revision"/>, staged (<c>git restore --source --staged --worktree</c>).</summary>
+    Task RestoreFromAsync(string revision, string path, CancellationToken cancellationToken = default);
 }
 
 public interface IBranchOperations
@@ -177,6 +185,69 @@ public interface IHistoryOperations
     Task<GitResult> ContinueAsync(CancellationToken cancellationToken = default);
     Task<GitResult> AbortAsync(CancellationToken cancellationToken = default);
     Task<GitResult> SkipAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <c>git bisect start</c>, then marks <paramref name="revision"/> good or bad. Once both a good and a bad commit are
+    /// known, git checks out a commit halfway between them to test. Returns git's output.
+    /// </summary>
+    Task<GitResult> StartBisectAsync(string revision, BisectMark mark, CancellationToken cancellationToken = default);
+
+    /// <summary><c>git bisect good|bad|skip [revision]</c> (null = the checked-out commit). Returns git's output.</summary>
+    Task<GitResult> MarkBisectAsync(BisectMark mark, string? revision = null, CancellationToken cancellationToken = default);
+
+    /// <summary><c>git bisect reset</c>: ends the session and returns to the branch it started on.</summary>
+    Task ResetBisectAsync(CancellationToken cancellationToken = default);
+
+    Task<BisectStatus> GetBisectStatusAsync(CancellationToken cancellationToken = default);
+}
+
+/// <summary>Linked working trees (<c>git worktree</c>): more than one branch checked out at once, each in its own folder.</summary>
+public interface IWorktreeOperations
+{
+    Task<IReadOnlyList<WorktreeInfo>> ListAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <c>git worktree add</c>: checks out <paramref name="branch"/> in <paramref name="path"/>, or, with
+    /// <paramref name="newBranch"/>, creates that branch at <paramref name="branch"/> (a start point) first.
+    /// </summary>
+    Task AddAsync(string path, string branch, string? newBranch, CancellationToken cancellationToken = default);
+
+    /// <summary><c>git worktree remove</c>. Without <paramref name="force"/>, git refuses a worktree with uncommitted changes.</summary>
+    Task RemoveAsync(string path, bool force, CancellationToken cancellationToken = default);
+
+    /// <summary><c>git worktree prune</c>: forgets worktrees whose folders were deleted.</summary>
+    Task PruneAsync(CancellationToken cancellationToken = default);
+}
+
+/// <summary>Moving work without a network connection between the repositories: patches and bundles.</summary>
+public interface ITransferOperations
+{
+    /// <summary><c>git format-patch</c>: one numbered .patch file per commit (oldest first) in <paramref name="directory"/>. Returns the files.</summary>
+    Task<IReadOnlyList<string>> SaveCommitsAsPatchesAsync(IReadOnlyList<string> shasOldestFirst, string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes all uncommitted changes (staged, unstaged, and new files) to <paramref name="file"/> as one binary-safe patch,
+    /// byte for byte as git produces it. Returns false (and writes nothing) when there are no changes.
+    /// </summary>
+    Task<bool> SaveUncommittedPatchAsync(string file, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Applies a patch file: a mailbox from <c>git format-patch</c> becomes commits (<c>git am -3</c>); a plain diff
+    /// changes files (<c>git apply --3way</c>). Conflicts are left to resolve, as with a merge.
+    /// </summary>
+    Task<GitResult> ApplyPatchAsync(string file, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <c>git bundle create</c>: <paramref name="refs"/> (branch or tag names, or "--all") in one file, optionally only the
+    /// commits after <paramref name="basis"/> (the receiving repository must already have it). Returns the refs it holds.
+    /// </summary>
+    Task<IReadOnlyList<string>> CreateBundleAsync(string file, IReadOnlyList<string> refs, string? basis, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Verifies a bundle, then fetches its branches as the remote <paramref name="remoteName"/> (added, or pointed at the
+    /// file, as needed), so they show as <c>remoteName/branch</c> to check out or merge.
+    /// </summary>
+    Task FetchBundleAsync(string file, string remoteName, IProgress<string>? progress, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Git LFS: tracked patterns, stored files, and server-side file locking (requires git-lfs on PATH).</summary>
@@ -214,4 +285,34 @@ public interface ISubmoduleOperations
 
     /// <summary>Nested status of every submodule (<c>git submodule status --recursive</c>). Read-only.</summary>
     Task<IReadOnlyList<SubmoduleStatusEntry>> GetRecursiveStatusAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Updates one submodule at any depth (a path from <see cref="GetRecursiveStatusAsync"/>) to the commit its parent
+    /// records, with its nested submodules. A nested submodule is updated from inside the submodule that contains it.
+    /// </summary>
+    Task UpdateOneAsync(string path, IProgress<string>? progress, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <c>git submodule update --remote</c>: moves top-level submodules to the newest commit of the branch they track
+    /// (<c>submodule.&lt;name&gt;.branch</c>, default the remote's HEAD), then puts their nested submodules at the commits
+    /// those new commits record. The superproject then shows the submodules as changed, ready to commit.
+    /// </summary>
+    Task UpdateToRemoteAsync(IReadOnlyCollection<string> paths, IProgress<string>? progress, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pushes the submodule branch that holds the commit <paramref name="superRevision"/> records for <paramref name="path"/>
+    /// (its current branch when that one does) to the branch's upstream, or to origin with tracking set. Unlike
+    /// <c>git push --recurse-submodules=on-demand</c>, which pushes the submodule branch named like the superproject's,
+    /// this pushes the branch the commit is actually on. Returns "remote/branch". Throws when no branch contains it.
+    /// </summary>
+    Task<string> PushRecordedCommitAsync(string path, string superRevision, IProgress<string>? progress, CancellationToken cancellationToken = default);
+
+    /// <summary><c>git submodule add [-b branch] -- url path</c>: clones it and stages it with its .gitmodules entry.</summary>
+    Task AddAsync(string url, string path, string? branch, IProgress<string>? progress, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <c>git submodule deinit -f</c> then <c>git rm -f</c>: deletes the submodule's folder and stages its removal (and its
+    /// .gitmodules entry). Its git data stays in .git/modules, so commits made in it are not lost.
+    /// </summary>
+    Task RemoveAsync(string path, CancellationToken cancellationToken = default);
 }

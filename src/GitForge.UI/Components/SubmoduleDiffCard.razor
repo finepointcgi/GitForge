@@ -1,0 +1,91 @@
+@inject RepoWorkspace W
+
+@* A submodule's "diff" is its recorded commit moving; show which commits that brings in or drops. *@
+<div class="gf-submodule-diff">
+    <div class="gf-submodule-diff-title">
+        <MudIcon Icon="@Icons.Material.Outlined.Extension" Size="Size.Small" />
+        <span>Submodule <span class="gf-mono">@Path</span></span>
+    </div>
+    <div class="gf-submodule-diff-line">
+        @if (Change.Old is null)
+        {
+            <span>Added at <span class="gf-mono">@Short(Change.New)</span></span>
+        }
+        else if (Change.New is null)
+        {
+            <span>Removed (was at <span class="gf-mono">@Short(Change.Old)</span>)</span>
+        }
+        else if (Change.Old == Change.New)
+        {
+            <span>Still at <span class="gf-mono">@Short(Change.New)</span></span>
+        }
+        else
+        {
+            <span>Recorded commit <span class="gf-mono">@Short(Change.Old)</span> → <span class="gf-mono">@Short(Change.New)</span></span>
+        }
+    </div>
+    @if (Change.Dirty)
+    {
+        <div class="gf-submodule-diff-line gf-warn">It has uncommitted changes inside. Commit or stash them in the submodule; the superproject only records commits.</div>
+    }
+    @if (_added is { Count: > 0 })
+    {
+        <div class="gf-group-head"><span class="gf-group-title">@_added.Count new commit@(_added.Count == 1 ? null : "s")@(_added.Count == Max ? "+" : null)</span></div>
+        @foreach (var (sha, subject) in _added)
+        {
+            <div class="gf-submodule-commit"><span class="gf-mono gf-dim">@sha</span> @subject</div>
+        }
+    }
+    @if (_removed is { Count: > 0 })
+    {
+        <div class="gf-group-head"><span class="gf-group-title">@_removed.Count commit@(_removed.Count == 1 ? null : "s") dropped@(_removed.Count == Max ? "+" : null)</span></div>
+        @foreach (var (sha, subject) in _removed)
+        {
+            <div class="gf-submodule-commit"><span class="gf-mono gf-dim">@sha</span> @subject</div>
+        }
+    }
+    @if (_unavailable)
+    {
+        <p class="gf-dim gf-small">The commits aren't available in the submodule's checkout, so they can't be listed. Update the submodule to fetch them.</p>
+    }
+    <div class="gf-submodule-diff-actions">
+        <button class="gf-btn gf-btn-ghost" @onclick="@(() => W.OpenAsync(System.IO.Path.Combine(W.Repo!.WorkingDirectory, Path)))">Open submodule in GitForge</button>
+    </div>
+</div>
+
+@code {
+    private const int Max = 200;
+
+    [Parameter, EditorRequired] public string Path { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public SubmoduleChange Change { get; set; } = default!;
+
+    private List<(string Sha, string Subject)>? _added;
+    private List<(string Sha, string Subject)>? _removed;
+    private bool _unavailable;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _added = _removed = null;
+        _unavailable = false;
+        if (W.Repo is not { } repo || Change.Old is not { } old || Change.New is not { } @new || old == @new) return;
+        try
+        {
+            _added = await LogAsync(repo, old, @new);
+            _removed = await LogAsync(repo, @new, old);
+        }
+        catch (GitCommandException)
+        {
+            _unavailable = true;
+        }
+    }
+
+    private async Task<List<(string, string)>> LogAsync(IGitRepository repo, string from, string to)
+    {
+        var r = await repo.QueryAsync(["-C", Path, "log", $"--max-count={Max}", "--format=%h%x1f%s", $"{from}..{to}", "--"]);
+        return r.EnsureSuccess("log").StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Split('\x1f') is [var sha, var subject] ? (sha, subject.TrimEnd('\r')) : (l, string.Empty))
+            .ToList();
+    }
+
+    private static string Short(string? sha) => sha is { Length: > 8 } ? sha[..8] : sha ?? string.Empty;
+}

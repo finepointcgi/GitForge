@@ -62,6 +62,9 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
     private readonly GitEngineOptions _engine;
     private readonly ISnackbar _snackbar;
     private readonly ILogger<RepoWorkspace> _log;
+    private readonly IDialogService _dialogs;
+    private readonly IPlatformShell _shell;
+    private readonly IGitCli _cli;
     private readonly List<RepoSession> _sessions = [];
     private readonly UndoManager _noUndo = new();
     private readonly List<string> _noConsole = [];
@@ -69,7 +72,9 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
     private readonly Dictionary<string, bool> _noFolders = [];
     private RepoSession? _active;
 
-    public RepoWorkspace(IGitRepositoryFactory factory, ISettingsStore settings, IAccountService accounts, GitEngineOptions engine, ISnackbar snackbar, ILogger<RepoWorkspace> log)
+    public RepoWorkspace(
+        IGitRepositoryFactory factory, ISettingsStore settings, IAccountService accounts, GitEngineOptions engine, ISnackbar snackbar,
+        ILogger<RepoWorkspace> log, IDialogService dialogs, IPlatformShell shell, IGitCli cli)
     {
         _factory = factory;
         _settings = settings;
@@ -77,6 +82,9 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         _engine = engine;
         _snackbar = snackbar;
         _log = log;
+        _dialogs = dialogs;
+        _shell = shell;
+        _cli = cli;
         _engine.SelfHostedResolver = _accounts.ResolveSelfHosted;
     }
 
@@ -709,6 +717,9 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
                     StartupTrace.Step("repo: snapshot", step);
                     if (snapshot.Submodules.Count == 0) session.SubmoduleStatus = [];
                     else _ = RefreshSubmoduleStatusAsync(session);
+                    _ = RefreshWorktreesAsync(session);
+                    session.Bisect = snapshot.Operation == RepositoryOperation.Bisect ? await repo.History.GetBisectStatusAsync() : BisectStatus.None;
+                    if (session.Bisect == BisectStatus.None) session.BisectMessage = null;
                 }
 
                 var statusStep = Stopwatch.GetTimestamp();
@@ -940,9 +951,9 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
             if (result.IsEmpty) Info("No submodules to update.");
         });
 
-    /// <summary>Updates one top-level submodule (and its nested submodules).</summary>
+    /// <summary>Updates one submodule, at any depth, to the commit its parent records (and its nested submodules).</summary>
     public Task UpdateSubmoduleAsync(string path) =>
-        RunAsync($"Updating {path}", (r, p) => r.Submodules.UpdateAsync([path], init: true, recursive: true, p), $"Updated {path}");
+        RunAsync($"Updating {path}", (r, p) => r.Submodules.UpdateOneAsync(path, p), $"Updated {path}");
 
     private async Task CheckSubmodulesOnOpenAsync()
     {
@@ -1027,7 +1038,7 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
 
         var remoteBranch = head.UpstreamName is { } up && up.StartsWith(remote.Name + "/", StringComparison.Ordinal) ? up[(remote.Name.Length + 1)..] : head.Name;
         var request = new PushRequest(remote.Name, head.Name, remoteBranch, SetUpstream: !head.HasUpstream, ForceWithLease: force);
-        return RunAsync("Pushing", (r, p) => r.Remotes.PushAsync(request, p), $"Pushed {head.Name} → {remote.Name}/{remoteBranch}");
+        return PushCheckedAsync(request, "Pushing", $"Pushed {head.Name} → {remote.Name}/{remoteBranch}");
     }
 
     public Task PopStashAsync()

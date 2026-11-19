@@ -33,8 +33,21 @@ public partial class MainWindow : Window
     private void OnWebViewInitializing(object? sender, BlazorWebViewInitializingEventArgs e)
     {
         StartupTrace.Mark("webview: creating");
-        // Keep WebView2 state in the user profile (install folders may be read-only).
-        e.UserDataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GitForge", "WebView2");
+        e.UserDataFolder = WebViewDataFolder();
+    }
+
+    /// <summary>
+    /// Installed and portable copies keep WebView2 data in their own root folder (beside Velopack's Update.exe), so
+    /// uninstalling removes it. A build run from source uses a separate folder: writing into %LOCALAPPDATA%\GitForge before
+    /// GitForge was installed made Setup stop to ask whether to overwrite that folder.
+    /// </summary>
+    private static string WebViewDataFolder()
+    {
+        var app = AppContext.BaseDirectory.TrimEnd('\\', '/');
+        var root = Path.GetDirectoryName(app);
+        return string.Equals(Path.GetFileName(app), "current", StringComparison.OrdinalIgnoreCase) && root is not null && File.Exists(Path.Combine(root, "Update.exe"))
+            ? Path.Combine(root, "WebView2")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GitForge.Dev", "WebView2");
     }
 
     private void OnWebViewInitialized(object? sender, BlazorWebViewInitializedEventArgs e)
@@ -51,10 +64,12 @@ public partial class MainWindow : Window
     }
 }
 
-/// <summary>Adds the native Windows folder picker.</summary>
+/// <summary>Adds the native Windows folder, open, and save pickers.</summary>
 internal sealed class WpfPlatformShell : DefaultPlatformShell
 {
     public override bool CanPickFolder => true;
+
+    public override bool CanPickFiles => true;
 
     public override Task<string?> PickFolderAsync(string? initialDirectory = null) =>
         Application.Current.Dispatcher.InvokeAsync(() =>
@@ -62,5 +77,21 @@ internal sealed class WpfPlatformShell : DefaultPlatformShell
             var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Select a folder" };
             if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory)) dialog.InitialDirectory = initialDirectory;
             return dialog.ShowDialog(Application.Current.MainWindow) == true ? dialog.FolderName : null;
+        }).Task;
+
+    public override Task<string?> PickOpenFileAsync(string title, string filter, string? initialDirectory = null) =>
+        Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = title, Filter = filter, CheckFileExists = true };
+            if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory)) dialog.InitialDirectory = initialDirectory;
+            return dialog.ShowDialog(Application.Current.MainWindow) == true ? dialog.FileName : null;
+        }).Task;
+
+    public override Task<string?> PickSaveFileAsync(string title, string fileName, string filter, string? initialDirectory = null) =>
+        Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var dialog = new Microsoft.Win32.SaveFileDialog { Title = title, Filter = filter, FileName = fileName, OverwritePrompt = true };
+            if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory)) dialog.InitialDirectory = initialDirectory;
+            return dialog.ShowDialog(Application.Current.MainWindow) == true ? dialog.FileName : null;
         }).Task;
 }

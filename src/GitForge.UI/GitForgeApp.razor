@@ -7,6 +7,7 @@
 @inject StartupOptions Startup
 @inject UpdateService Updates
 @inject ISnackbar Snackbar
+@inject IPlatformShell Shell
 
 <MudThemeProvider @ref="_themeProvider" Theme="_theme" IsDarkMode="_dark" />
 <MudPopoverProvider />
@@ -250,14 +251,72 @@
                 W.ConsoleOpen = !W.ConsoleOpen;
                 W.Notify();
                 break;
-            case "palette.open": await ShowPalette(); break;
+            case "palette.open": await ShowPalette(null); break;
             case "prs.open" when hasRepo: await Show<PullRequestsDialog>("Pull requests", MaxWidth.Medium); break;
             case "accounts.open": await Show<AccountsDialog>("Hosting accounts", MaxWidth.Medium); break;
             case "settings.open": await Show<SettingsDialog>("Settings"); break;
             case "theme.toggle": await ToggleTheme(); break;
             case "help.shortcuts": await Show<ShortcutsDialog>("Keyboard shortcuts", MaxWidth.Medium); break;
             case "app.update": await ShowUpdates(); break;
+            case "branch.merge" when hasRepo: await ShowPalette("Merge "); break;
+            case "branch.rebase" when hasRepo: await ShowPalette("Rebase "); break;
+            case "commit.cherrypick" when hasRepo: await WithSelectedCommit(c => CommitActions.CherryPickAsync(W, c)); break;
+            case "commit.revert" when hasRepo: await WithSelectedCommit(c => CommitActions.RevertAsync(W, Dialogs, c)); break;
+            case "commit.tag" when hasRepo: await WithSelectedCommit(c => CommitActions.NewTagAsync(W, Dialogs, c)); break;
+            case "commit.patch" when hasRepo: await SavePatchesAsync(); break;
+            case "worktree.add" when hasRepo: await Show<WorktreeDialog>("New worktree"); break;
+            case "bisect.good" when W.IsBisecting: await W.MarkBisectAsync(BisectMark.Good); break;
+            case "bisect.bad" when W.IsBisecting: await W.MarkBisectAsync(BisectMark.Bad); break;
+            case "bisect.skip" when W.IsBisecting: await W.MarkBisectAsync(BisectMark.Skip); break;
+            case "bisect.reset" when W.IsBisecting: await W.ResetBisectAsync(); break;
+            case "repo.explorer" when hasRepo: W.RevealInExplorer(); break;
+            case "repo.terminal" when hasRepo: W.OpenTerminal(); break;
+            case "repo.editor" when hasRepo: W.OpenInEditor(); break;
+            case "patch.create" when hasRepo: await SaveUncommittedPatchAsync(); break;
+            case "patch.apply" when hasRepo: await ApplyPatchAsync(); break;
+            case "bundle.create" when hasRepo: await Show<BundleDialog>("Create bundle"); break;
+            case "bundle.fetch" when hasRepo: await FetchBundleAsync(); break;
+            case "submodule.add" when hasRepo: await Show<AddSubmoduleDialog>("Add submodule"); break;
+            case "submodule.remote" when hasRepo: await W.UpdateSubmodulesToRemoteAsync(); break;
         }
+    }
+
+    /// <summary>Runs a commit action on the commit selected in the graph.</summary>
+    private Task WithSelectedCommit(Func<CommitInfo, Task> action)
+    {
+        if (!W.WipSelected && W.SelectedCommitSha is { } sha && W.FindCommit(sha) is { } commit) return action(commit);
+        W.Info("Select a commit in the graph first.", Severity.Warning);
+        return Task.CompletedTask;
+    }
+
+    private Task SavePatchesAsync()
+    {
+        var commits = W.MultiSelection.Count > 1 ? W.SelectedCommitsOldestFirst() : [];
+        return commits.Count > 0 ? CommitActions.SavePatchesAsync(W, Shell, Dialogs, commits) : WithSelectedCommit(c => CommitActions.SavePatchesAsync(W, Shell, Dialogs, [c]));
+    }
+
+    private async Task SaveUncommittedPatchAsync()
+    {
+        if (!W.HasWip)
+        {
+            W.Info("There are no uncommitted changes to save.", Severity.Warning);
+            return;
+        }
+
+        var file = await PathPrompt.SaveFileAsync(Shell, Dialogs, "Save uncommitted changes as a patch", $"{W.Repo!.Name}-{DateTime.Now:yyyyMMdd-HHmm}.patch", PathPrompt.PatchFilter);
+        if (file is not null) await W.SaveUncommittedPatchAsync(file);
+    }
+
+    private async Task ApplyPatchAsync()
+    {
+        var file = await PathPrompt.OpenFileAsync(Shell, Dialogs, "Apply patch", PathPrompt.PatchFilter);
+        if (file is not null) await W.ApplyPatchAsync(file);
+    }
+
+    private async Task FetchBundleAsync()
+    {
+        var file = await PathPrompt.OpenFileAsync(Shell, Dialogs, "Fetch from bundle", PathPrompt.BundleFilter);
+        if (file is not null) await W.FetchBundleAsync(file, "bundle");
     }
 
     /// <summary>Offers to delete local branches whose upstream was deleted on the remote; only fully merged ones are removed.</summary>
@@ -286,10 +345,11 @@
         await SettingsStore.UpdateAsync(s => s with { Theme = _dark ? ThemePreference.Dark : ThemePreference.Light });
     }
 
-    private async Task ShowPalette()
+    private async Task ShowPalette(string? query)
     {
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, NoHeader = true, Position = DialogPosition.TopCenter, CloseOnEscapeKey = true };
-        var dialog = await Dialogs.ShowAsync<CommandPalette>("Command palette", options);
+        var parameters = new DialogParameters<CommandPalette> { { p => p.InitialQuery, query } };
+        var dialog = await Dialogs.ShowAsync<CommandPalette>("Command palette", parameters, options);
         await dialog.Result;
     }
 

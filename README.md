@@ -17,6 +17,12 @@ A fast, keyboard-first Git client for Windows, built with C#/.NET 10, Blazor, an
 - **Syntax highlighting** in diffs and blame using VS Code's TextMate grammars, computed only for the lines on screen.
 - **Git LFS:** LFS file badges, tracked patterns, and server file locks (lock, unlock, force-unlock with confirmation).
 - **Automatic recursive submodules:** after checkout, pull, merge, rebase, reset, or undo, submodules whose recorded commit changed are synced and updated (`--init --recursive`); submodules with local changes are never overwritten. Uninitialized submodules are initialized on open. Toggle in **Settings**.
+- **Submodule safety:** a push that points to submodule commits that aren't on the submodule's remote is stopped, with an offer to push the submodule branch holding them first. Committing on a detached HEAD (usual inside a submodule) shows a warning with **Create a branch here**. A changed submodule shows the commits it brings in or drops. Add, remove, update one (at any depth), or move submodules to the newest commit on their remote branch.
+- **Worktrees:** check out another branch in its own folder (**New worktree…**, or right-click a branch). Branches checked out in another worktree are marked, and double-clicking one opens its worktree.
+- **Bisect:** right-click a commit › **Bisect** to mark it good or bad; the banner tracks progress (Good, Bad, Skip) until git names the first bad commit.
+- **Patches and bundles:** save commits or uncommitted changes as .patch files and apply them (commits keep their author and message); create and fetch from bundles to move work between networks without a connection.
+- **File right-click menu:** open, open in editor, show in Explorer, copy path, diff tool, history, blame, add to .gitignore, stop tracking, resolve using mine or theirs, or restore a file to a commit's version. GitForge never runs programs or scripts from a repository; those open in the editor.
+- **External tools:** terminal and Explorer buttons; editor, diff tool (`git difftool`), and merge tool in **Settings › External tools**.
 - **Advanced Git:** visual interactive rebase, reflog recovery, conflict tools, submodules.
 - **Multi-account hosting:** tokens in Windows Credential Manager, repository browser, pull request list.
 - **Forest-green dark theme** matching the GitForge icon. The accent color defaults to GitForge green (a darker green in light mode, for contrast) and can be changed in **Settings**.
@@ -95,7 +101,7 @@ dotnet run --project src/GitForge.DevHost
 | / or Ctrl+F | Filter commits |
 | ? | Show and customize all shortcuts |
 
-These are the defaults; every shortcut can be changed or removed (press **?**). Single-key shortcuts work outside text fields while vim-style navigation is on in **Settings**.
+These are the defaults; every shortcut can be changed or removed (press **?**). Commands without a default (bisect, patches, bundles, worktrees, submodules, terminal, Explorer, editor, and actions on the selected commit) can be given keys there, and all of them are in the command palette. Single-key shortcuts work outside text fields while vim-style navigation is on in **Settings**.
 
 Branch folders (feature/, fix/, chore/ …) start collapsed, except the one holding the current branch; the filter at the top of the sidebar stays in view and opens every folder with a match. Click a branch to jump to its commit; double-click to check it out; drag it onto another branch to merge or rebase. Hover a branch to hide it from the graph, or right-click to solo it. Click a stash to preview it. Right-click branches, tags, stashes, and commits for more actions.
 

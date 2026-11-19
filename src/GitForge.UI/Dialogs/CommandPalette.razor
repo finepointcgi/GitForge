@@ -1,5 +1,7 @@
 @inject RepoWorkspace W
 @inject ShortcutService Shortcuts
+@inject IDialogService Dialogs
+@inject IPlatformShell Shell
 
 <MudDialog Class="gf-palette" ContentClass="gf-palette-content">
     <DialogContent>
@@ -34,6 +36,9 @@
 
 @code {
     [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>Text to start with ("Merge " lists the branches to merge).</summary>
+    [Parameter] public string? InitialQuery { get; set; }
 
     private sealed record PaletteCommand(string Title, string Group, string Icon, string? Keys, Func<Task> Run);
 
@@ -74,6 +79,16 @@
                 new("Stash changes…", "Stash", Icons.Material.Outlined.Inventory2, K("stash.save"), Cmd("stash.save")),
                 new("Pop latest stash", "Stash", Icons.Material.Outlined.Unarchive, K("stash.pop"), W.PopStashAsync),
                 new("Update submodules (recursive)", "Submodules", Icons.Material.Outlined.Extension, null, W.UpdateSubmodulesAsync),
+                new("Update submodules to the newest remote commits", "Submodules", Icons.Material.Outlined.Extension, K("submodule.remote"), Cmd("submodule.remote")),
+                new("Add submodule…", "Submodules", Icons.Material.Outlined.Extension, K("submodule.add"), Cmd("submodule.add")),
+                new("New worktree…", "Worktree", Icons.Material.Outlined.AccountTree, K("worktree.add"), Cmd("worktree.add")),
+                new("Show repository in Explorer", "Tools", Icons.Material.Outlined.FolderOpen, K("repo.explorer"), Cmd("repo.explorer")),
+                new("Open terminal here", "Tools", Icons.Material.Outlined.Terminal, K("repo.terminal"), Cmd("repo.terminal")),
+                new("Open repository in editor", "Tools", Icons.Material.Outlined.Code, K("repo.editor"), Cmd("repo.editor")),
+                new("Save uncommitted changes as a patch…", "Patch", Icons.Material.Outlined.Description, K("patch.create"), Cmd("patch.create")),
+                new("Apply patch…", "Patch", Icons.Material.Outlined.Description, K("patch.apply"), Cmd("patch.apply")),
+                new("Create bundle (offline transfer)…", "Bundle", Icons.Material.Outlined.Inventory, K("bundle.create"), Cmd("bundle.create")),
+                new("Fetch from bundle…", "Bundle", Icons.Material.Outlined.Inventory, K("bundle.fetch"), Cmd("bundle.fetch")),
                 new("Next repository tab", "Tabs", Icons.Material.Outlined.Tab, K("tab.next"), Cmd("tab.next")),
                 new("Close repository tab", "Tabs", Icons.Material.Outlined.Close, K("tab.close"), Cmd("tab.close")),
                 new(W.Undo.CanUndo ? $"Undo {W.Undo.UndoDescription}" : "Undo", "Edit", Icons.Material.Outlined.Undo, K("edit.undo"), Cmd("edit.undo")),
@@ -94,6 +109,28 @@
                 _all.Add(new($"Blame: {openPath}", "File", Icons.Material.Outlined.PersonSearch, null, () => { W.ShowBlame(openPath, W.OpenDiff?.CommitSha); return Task.CompletedTask; }));
             }
 
+            AddCommitCommands(K, Cmd);
+
+            if (W.IsBisecting)
+            {
+                _all.InsertRange(0,
+                [
+                    new("Bisect: mark this commit good", "Bisect", Icons.Material.Outlined.ThumbUp, K("bisect.good"), Cmd("bisect.good")),
+                    new("Bisect: mark this commit bad", "Bisect", Icons.Material.Outlined.ThumbDown, K("bisect.bad"), Cmd("bisect.bad")),
+                    new("Bisect: skip this commit", "Bisect", Icons.Material.Outlined.SkipNext, K("bisect.skip"), Cmd("bisect.skip")),
+                    new("Bisect: end", "Bisect", Icons.Material.Outlined.Close, K("bisect.reset"), Cmd("bisect.reset")),
+                ]);
+            }
+            else if (W.Snapshot?.HeadSha is { } head)
+            {
+                _all.Add(new("Bisect: start (the checked-out commit has the bug)", "Bisect", Icons.Material.Outlined.ManageSearch, null, () => W.StartBisectAsync(head, BisectMark.Bad)));
+            }
+
+            foreach (var wt in W.Worktrees.Where(w => !w.IsCurrent && !w.IsBare))
+            {
+                _all.Add(new($"Open worktree {wt.Name}{(wt.Branch is { } wb ? $" ({wb})" : null)}", "Worktree", Icons.Material.Outlined.AccountTree, null, () => W.OpenAsync(wt.Path)));
+            }
+
             if (W.Lfs.InUse)
             {
                 _all.Add(new("LFS: refresh locks", "LFS", Icons.Material.Outlined.Lock, null, W.RefreshLocksAsync));
@@ -108,6 +145,16 @@
             {
                 if (!b.IsCurrent) _all.Add(new($"Checkout {b.Name}", "Branch", Icons.Material.Outlined.Computer, null, () => W.CheckoutAsync(b.Name)));
                 if (!b.IsCurrent) _all.Add(new($"Show changes on {b.Name}", "Branch", Icons.Material.Outlined.Difference, null, () => { W.ShowBranchChanges(b.Name); return Task.CompletedTask; }));
+                if (!b.IsCurrent && W.CurrentBranch is { } current)
+                {
+                    _all.Add(new($"Merge {b.Name} into {current}", "Branch", Icons.Material.Outlined.MergeType, null, () => Merge(b.Name)));
+                    _all.Add(new($"Rebase {current} onto {b.Name}", "Branch", Icons.Material.Outlined.AltRoute, null, () => Rebase(b.Name)));
+                }
+
+                if (!b.IsCurrent && W.WorktreeHolding(b.Name) is null)
+                {
+                    _all.Add(new($"Check out {b.Name} in a new worktree…", "Worktree", Icons.Material.Outlined.AccountTree, null, () => NewWorktree(b.Name)));
+                }
             }
 
             foreach (var b in W.Snapshot?.RemoteBranches ?? [])
@@ -117,6 +164,13 @@
                 _all.Add(new($"Checkout {b.Name} as {local}", "Remote branch", Icons.Material.Outlined.Cloud, null,
                     () => W.RunAsync($"Checking out {local}", (r, _) => r.Branches.CheckoutRemoteBranchAsync(b.Name, local))));
             }
+
+            foreach (var b in W.Snapshot?.RemoteBranches ?? [])
+            {
+                if (W.CurrentBranch is not { } current) break;
+                _all.Add(new($"Merge {b.Name} into {current}", "Remote branch", Icons.Material.Outlined.MergeType, null, () => Merge(b.Name)));
+                _all.Add(new($"Rebase {current} onto {b.Name}", "Remote branch", Icons.Material.Outlined.AltRoute, null, () => Rebase(b.Name)));
+            }
         }
 
         foreach (var r in W.Settings.RecentRepositories.Where(r => !string.Equals(r, W.Repo?.WorkingDirectory, StringComparison.OrdinalIgnoreCase)))
@@ -124,7 +178,54 @@
             _all.Add(new($"Open {System.IO.Path.GetFileName(r)}", "Recent", Icons.Material.Outlined.Folder, null, () => W.OpenAsync(r)));
         }
 
+        _query = InitialQuery ?? string.Empty;
         Filter();
+    }
+
+    /// <summary>Actions on the commit selected in the graph (the palette's version of its right-click menu).</summary>
+    private void AddCommitCommands(Func<string, string?> K, Func<string, Func<Task>> Cmd)
+    {
+        if (W.WipSelected || W.SelectedCommitSha is not { } sha || W.FindCommit(sha) is not { } c) return;
+        var at = $"{c.ShortSha} “{(c.Subject.Length > 40 ? c.Subject[..40] + "…" : c.Subject)}”";
+        var target = W.CurrentBranch ?? "HEAD";
+        _all.AddRange(
+        [
+            new($"Cherry-pick {at} onto {target}", "Commit", Icons.Material.Outlined.ContentPasteGo, K("commit.cherrypick"), Cmd("commit.cherrypick")),
+            new($"Revert {at}…", "Commit", Icons.Material.Outlined.Undo, K("commit.revert"), Cmd("commit.revert")),
+            new($"New branch at {at}…", "Commit", Icons.Material.Outlined.CallSplit, null, () => CommitActions.NewBranchAsync(W, Dialogs, c)),
+            new($"New tag at {at}…", "Commit", Icons.Material.Outlined.LocalOffer, K("commit.tag"), Cmd("commit.tag")),
+            new($"Reset {target} to {at} (soft: keep index)", "Commit", Icons.Material.Outlined.Restore, null, () => CommitActions.ResetAsync(W, Dialogs, c, ResetMode.Soft)),
+            new($"Reset {target} to {at} (mixed: keep files)", "Commit", Icons.Material.Outlined.Restore, null, () => CommitActions.ResetAsync(W, Dialogs, c, ResetMode.Mixed)),
+            new($"Reset {target} to {at} (hard: discard changes)…", "Commit", Icons.Material.Outlined.Restore, null, () => CommitActions.ResetAsync(W, Dialogs, c, ResetMode.Hard)),
+            new($"Interactive rebase of the commits after {at}…", "Commit", Icons.Material.Outlined.Reorder, null, () => CommitActions.InteractiveRebaseAsync(W, Dialogs, c)),
+            new($"Save {at} as a patch…", "Commit", Icons.Material.Outlined.Description, K("commit.patch"), Cmd("commit.patch")),
+            new($"Compare {at} with the working tree", "Commit", Icons.Material.Outlined.Difference, null, () => { W.ShowCompare(c.Sha, null); return Task.CompletedTask; }),
+            new($"Bisect: {at} {(W.IsBisecting ? "is good" : "works (start)")}", "Bisect", Icons.Material.Outlined.ThumbUp, null, () => CommitActions.BisectAsync(W, c, BisectMark.Good)),
+            new($"Bisect: {at} {(W.IsBisecting ? "is bad" : "has the bug (start)")}", "Bisect", Icons.Material.Outlined.ThumbDown, null, () => CommitActions.BisectAsync(W, c, BisectMark.Bad)),
+        ]);
+    }
+
+    private async Task Merge(string branch)
+    {
+        if (await Dialogs.ShowMessageBoxAsync("Merge", $"Merge {branch} into {W.CurrentBranch}?", yesText: "Merge", cancelText: "Cancel") == true)
+        {
+            await W.RunAsync($"Merging {branch}", (r, _) => r.History.MergeAsync(branch, false), $"Merged {branch} into {W.CurrentBranch}");
+        }
+    }
+
+    private async Task Rebase(string onto)
+    {
+        if (await Dialogs.ShowMessageBoxAsync("Rebase", $"Rebase {W.CurrentBranch} onto {onto}? Local commits will be rewritten.", yesText: "Rebase", cancelText: "Cancel") == true)
+        {
+            await W.RunAsync($"Rebasing onto {onto}", (r, _) => r.History.RebaseOntoAsync(onto), $"Rebased {W.CurrentBranch} onto {onto}");
+        }
+    }
+
+    private async Task NewWorktree(string branch)
+    {
+        var parameters = new DialogParameters<WorktreeDialog> { { d => d.Branch, branch } };
+        var dialog = await Dialogs.ShowAsync<WorktreeDialog>("New worktree", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true });
+        await dialog.Result;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
