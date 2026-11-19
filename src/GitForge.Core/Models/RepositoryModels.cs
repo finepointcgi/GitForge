@@ -15,6 +15,22 @@ public sealed record BranchHead(
     public bool IsUpstreamGone => UpstreamName is not null && Ahead is null && Behind is null;
 }
 
+/// <summary>Whether deleting a branch would lose work, judged against a base branch.</summary>
+public enum BranchMergeState
+{
+    /// <summary>Its last commit is in the base or in HEAD (merged or fast-forwarded).</summary>
+    Merged,
+
+    /// <summary>Its changes are in the base as other commits (a squash or rebase merge).</summary>
+    ChangesInBase,
+
+    /// <summary>It has changes that are not in the base.</summary>
+    Unmerged,
+}
+
+/// <summary>A branch checked before cleanup. <see cref="UnmergedCommits"/> counts its commits whose changes are not in the base.</summary>
+public sealed record BranchMergeCheck(string Branch, string TipSha, BranchMergeState State, int UnmergedCommits);
+
 public sealed record TagInfo(string Name, string TargetSha, bool IsAnnotated, string? Message);
 
 public sealed record RemoteInfo(string Name, string FetchUrl, string? PushUrl, RemoteRepositoryRef? Hosted);

@@ -319,24 +319,18 @@
         if (file is not null) await W.FetchBundleAsync(file, "bundle");
     }
 
-    /// <summary>Offers to delete local branches whose upstream was deleted on the remote; only fully merged ones are removed.</summary>
+    /// <summary>Reviews local branches whose copies on the remote were deleted, and deletes the ones chosen.</summary>
     private async Task CleanUpBranchesAsync()
     {
-        var names = W.GoneBranches.Select(b => b.Name).ToList();
-        if (names.Count == 0)
+        if (W.GoneBranches.Count == 0)
         {
             W.Info("No local branches to clean up. None of their copies on the remote were deleted.");
             return;
         }
 
-        var list = string.Join(", ", names.Take(15)) + (names.Count > 15 ? $", and {names.Count - 15} more" : string.Empty);
-        var message = $"Their copies on the remote were deleted: {list}. " +
-                      $"GitForge deletes only branches whose commits are already in {W.CurrentBranch ?? "HEAD"}, so no work is lost. " +
-                      "Branches with other commits (common after squash merges) are kept for you to review.";
-        if (await Dialogs.ShowMessageBoxAsync("Clean up branches", message, yesText: "Delete merged", cancelText: "Cancel") == true)
-        {
-            await W.CleanUpGoneBranchesAsync(names);
-        }
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true };
+        var dialog = await Dialogs.ShowAsync<CleanUpBranchesDialog>("Clean up branches", options);
+        await dialog.Result;
     }
 
     private async Task ToggleTheme()

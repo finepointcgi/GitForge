@@ -124,6 +124,15 @@ public interface IBranchOperations
     Task CreateAsync(string name, string startPoint, bool checkout, CancellationToken cancellationToken = default);
     Task RenameAsync(string oldName, string newName, CancellationToken cancellationToken = default);
     Task DeleteAsync(string name, bool force, CancellationToken cancellationToken = default);
+
+    /// <summary>Deletes a local branch only if it still points at <paramref name="expectedTip"/>, so commits made after a check are never lost.</summary>
+    Task DeleteIfUnchangedAsync(string name, string expectedTip, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// For cleanup: whether each branch's work is already in <paramref name="baseRef"/> (merged, or squash- or rebase-merged
+    /// as other commits) or in HEAD. Changes no refs or working files.
+    /// </summary>
+    Task<IReadOnlyList<BranchMergeCheck>> CheckMergedAsync(IReadOnlyList<string> branches, string baseRef, CancellationToken cancellationToken = default);
     Task DeleteRemoteAsync(string remote, string branch, IProgress<string>? progress, CancellationToken cancellationToken = default);
     Task SetUpstreamAsync(string localBranch, string? upstream, CancellationToken cancellationToken = default);
     Task CreateTagAsync(string name, string target, string? message, CancellationToken cancellationToken = default);
@@ -217,6 +226,9 @@ public interface IWorktreeOperations
 
     /// <summary><c>git worktree prune</c>: forgets worktrees whose folders were deleted.</summary>
     Task PruneAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Whether the worktree at <paramref name="path"/> has uncommitted changes or untracked files, including inside submodules.</summary>
+    Task<bool> HasChangesAsync(string path, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Moving work without a network connection between the repositories: patches and bundles.</summary>

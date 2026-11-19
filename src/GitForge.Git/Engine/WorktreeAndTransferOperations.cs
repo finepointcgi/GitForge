@@ -58,6 +58,12 @@ internal sealed class WorktreeOperations(RepoContext ctx) : IWorktreeOperations
     public Task PruneAsync(CancellationToken cancellationToken = default) =>
         ctx.WriteAsync("worktree prune", ["worktree", "prune"], cancellationToken);
 
+    public async Task<bool> HasChangesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var r = await ctx.RunAsync(["--no-optional-locks", "-C", FullPath(path), "status", "--porcelain", "--ignore-submodules=none", "--untracked-files=normal"], cancellationToken).ConfigureAwait(false);
+        return r.EnsureSuccess("status").StandardOutput.Trim().Length > 0;
+    }
+
     private static string FullPath(string path) =>
         string.IsNullOrWhiteSpace(path) ? throw new ArgumentException("Choose a folder for the worktree.", nameof(path)) : Path.GetFullPath(path.Trim().Trim('"'));
 }

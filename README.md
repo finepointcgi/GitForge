@@ -107,7 +107,7 @@ Branch folders (feature/, fix/, chore/ …) start collapsed, except the one hold
 
 Drag the borders in the graph header to resize columns; double-click a border, or right-click the header and choose **Reset column widths**, to restore defaults. Widths are remembered. To put the graph left of the branch labels (Sourcetree's order), right-click the header and choose **Graph before Branch / Tag**.
 
-A **remote deleted** label means the branch's copy on the remote was deleted (usually after its pull request merged) and a fetch removed it. Local commits are untouched. Right-click to push it again, stop tracking, or delete it. **Clean up** in the toolbar (its badge counts these branches), or the note at the top of the Local list, deletes only those whose commits are already in the current branch.
+A **remote deleted** label means the branch's copy on the remote was deleted (usually after its pull request merged) and a fetch removed it. Local commits are untouched. Right-click to push it again, stop tracking, or delete it. **Clean up** in the toolbar (its badge counts these branches), or the note at the top of the Local list, checks each one against the remote's default branch (or another you choose) and lists it as merged, including after a squash or rebase merge, or not merged. Merged branches are selected for you; branches with unmerged commits, and branches checked out in a worktree without uncommitted changes (removing that worktree folder too), are yours to tick. Ctrl+Z restores the deleted branches.
 
 ## Hosting accounts
 

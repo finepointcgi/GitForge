@@ -1,5 +1,8 @@
+using System.Net;
 using GitForge.Core.Abstractions;
 using GitForge.Core.Models;
+using GitForge.Git.Undo;
+using Microsoft.AspNetCore.Components;
 using MudBlazor;
 
 namespace GitForge.UI.Services;
@@ -106,6 +109,130 @@ public sealed partial class RepoWorkspace
 
     /// <summary>The submodule at <paramref name="path"/>, when that working-copy path is a submodule rather than a file.</summary>
     public SubmoduleInfo? SubmoduleAt(string path) => Snapshot?.Submodules.FirstOrDefault(m => m.Path == path);
+
+    // ---------- Branch cleanup ----------
+
+    /// <summary>
+    /// Deletes the stale branches chosen in the cleanup dialog. A branch checked out in another worktree has that worktree
+    /// removed first, and only when nothing in it is uncommitted. A branch that moved since it was checked is kept.
+    /// </summary>
+    public async Task CleanUpBranchesAsync(IReadOnlyList<BranchCleanupItem> items)
+    {
+        if (items.Count == 0) return;
+
+        // A tab open on a worktree holds its folder open.
+        foreach (var path in items.Select(i => i.Worktree?.Path).OfType<string>())
+        {
+            if (_sessions.FirstOrDefault(s => GitOutput.SamePath(s.Path, path)) is { } tab && tab != _active) await CloseTabAsync(tab);
+        }
+
+        var undo = Undo;
+        var deleted = new List<(string Name, string Tip)>();
+        var removed = new List<string>();
+        var kept = new List<string>();
+        await RunAsync($"Cleaning up {Plural(items.Count, "branch", "branches")}", async (r, progress) =>
+        {
+            try
+            {
+                foreach (var item in items)
+                {
+                    progress.Report(item.Branch);
+                    if (item.Worktree is { } worktree)
+                    {
+                        try
+                        {
+                            if (await RemoveCleanWorktreeAsync(r, worktree)) removed.Add(worktree.Path);
+                        }
+                        catch (Exception ex) when (ex is GitCommandException or InvalidOperationException or IOException or UnauthorizedAccessException)
+                        {
+                            kept.Add($"{item.Branch}: its worktree {worktree.Path} was not removed. {Reason(ex)}");
+                            continue;
+                        }
+                    }
+
+                    try
+                    {
+                        await r.Branches.DeleteIfUnchangedAsync(item.Branch, item.TipSha);
+                        deleted.Add((item.Branch, item.TipSha));
+                    }
+                    catch (Exception ex) when (ex is GitCommandException or InvalidOperationException)
+                    {
+                        kept.Add($"{item.Branch}: {Reason(ex)}");
+                    }
+                }
+            }
+            finally
+            {
+                if (deleted.Count > 0) undo.Record(RestoreBranches([.. deleted]));
+            }
+        });
+
+        foreach (var path in removed) await ForgetRecentAsync(path);
+        if (deleted.Count > 0)
+        {
+            var worktrees = removed.Count > 0 ? $" and removed {Plural(removed.Count, "worktree", "worktrees")}" : null;
+            _snackbar.Add($"Deleted {Plural(deleted.Count, "branch", "branches")}{worktrees} ({Keymap.UndoName(Settings)} restores the {(deleted.Count == 1 ? "branch" : "branches")})", Severity.Success);
+        }
+
+        if (kept.Count > 0)
+        {
+            var list = string.Concat(kept.Select(k => $"<li>{WebUtility.HtmlEncode(k)}</li>"));
+            await _dialogs.ShowMessageBoxAsync("Some branches were kept", new MarkupString($"<ul class=\"gf-message-list\">{list}</ul>"), yesText: "OK");
+        }
+    }
+
+    /// <summary>Removes a linked worktree that has nothing uncommitted. False when only git's record of it was left (its folder was already gone).</summary>
+    private static async Task<bool> RemoveCleanWorktreeAsync(IGitRepository r, WorktreeInfo worktree)
+    {
+        if (worktree.IsMain) throw new InvalidOperationException("It is checked out in the main folder of this repository.");
+        if (worktree.IsLocked) throw new InvalidOperationException($"The worktree is locked{(string.IsNullOrWhiteSpace(worktree.LockReason) ? null : $" ({worktree.LockReason})")}. Unlock it with git worktree unlock first.");
+        if (worktree.IsPrunable || !Directory.Exists(worktree.Path))
+        {
+            await r.Worktrees.PruneAsync();
+            return false;
+        }
+
+        if (await r.Worktrees.HasChangesAsync(worktree.Path)) throw new InvalidOperationException("It has uncommitted changes.");
+        try
+        {
+            await r.Worktrees.RemoveAsync(worktree.Path, force: false);
+        }
+        catch (GitCommandException ex) when (ex.GitMessage.Contains("containing submodules", StringComparison.Ordinal))
+        {
+            // Checked clean just above, submodules included; git refuses only because of how it removes submodules.
+            await r.Worktrees.RemoveAsync(worktree.Path, force: true);
+        }
+
+        return true;
+    }
+
+    /// <summary>Undo for a cleanup: recreates the deleted branches where they were.</summary>
+    private static UndoEntry RestoreBranches(List<(string Name, string Tip)> deleted) => new(
+        deleted.Count == 1 ? $"delete branch {deleted[0].Name}" : $"delete {deleted.Count} branches",
+        async (r, c) =>
+        {
+            foreach (var (name, tip) in deleted) await r.Branches.CreateAsync(name, tip, checkout: false, c);
+        },
+        async (r, c) =>
+        {
+            foreach (var (name, tip) in deleted) await r.Branches.DeleteIfUnchangedAsync(name, tip, c);
+        });
+
+    /// <summary>The first line of a failure, with advice when Windows had files open.</summary>
+    private static string Reason(Exception ex)
+    {
+        var message = ex is GitCommandException g ? g.GitMessage.Split('\n')[0].Trim() : ex.Message;
+        foreach (var prefix in new[] { "error: ", "fatal: " })
+        {
+            if (message.StartsWith(prefix, StringComparison.Ordinal)) message = message[prefix.Length..];
+        }
+
+        var inUse = ex is IOException or UnauthorizedAccessException
+                    || message.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("failed to delete", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("Directory not empty", StringComparison.OrdinalIgnoreCase);
+        return inUse ? $"{message.TrimEnd('.')}. Close programs using that folder (editors, terminals, dev servers) and try again." : message;
+    }
 
     // ---------- Worktrees ----------
 

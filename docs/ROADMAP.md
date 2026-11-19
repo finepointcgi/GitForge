@@ -47,7 +47,7 @@ Status key: ✅ implemented and tested in this repository · 🟡 partially impl
 - ✅ Branch changes view (Ctrl+4): commits and combined diff since the merge base with a chosen branch, optionally including uncommitted work.
 - ✅ Resizable graph columns (drag header borders; double-click or header menu to reset; persisted).
 - ✅ WIP row pinned to the top of the graph with a dashed connector to HEAD that never runs along another branch line.
-- ✅ Plain-language "remote deleted" branches: explanation, push again, stop tracking, and safe bulk clean-up (`git branch -d`).
+- ✅ Plain-language "remote deleted" branches: explanation, push again, stop tracking, and safe bulk clean-up: merged, squash-merged, and rebase-merged branches are recognized against the default branch; branches held by clean worktrees can go with their worktree; undoable.
 - ✅ Multi-select commits (Ctrl+click, Shift+click, Shift+↓/↑): cherry-pick several, oldest first; compare any two commits or a commit with the working tree. A stalled multi-commit cherry-pick is detected and can be continued or aborted.
 - ✅ Stash preview pane (tracked and untracked files with diffs; apply, pop, drop) and hunk/line stash (`git stash push --patch` equivalent via patches). Applying into files with other uncommitted edits falls back to an atomic patch.
 - ✅ Line and hunk staging, unstaging, and discarding for new files (untracked or newly added), via partial new-file patches; text is normalized as `git add` would store it.

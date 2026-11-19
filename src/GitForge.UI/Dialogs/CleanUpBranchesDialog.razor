@@ -1,0 +1,225 @@
+@implements IDisposable
+@inject RepoWorkspace W
+
+<MudDialog>
+    <DialogContent>
+        <p class="gf-small gf-dim">
+            These branches' copies on the remote were deleted, usually after their pull requests merged.
+            A branch whose work is already in the branch below is safe to delete, including after a squash or rebase merge.
+        </p>
+        <div class="gf-dialog-row">
+            <label class="gf-small" for="gf-cleanup-base">Compare with</label>
+            <select id="gf-cleanup-base" class="gf-select" value="@_base" disabled="@_checking" @onchange="SetBaseAsync">
+                @foreach (var b in _bases)
+                {
+                    <option value="@b">@b</option>
+                }
+            </select>
+        </div>
+        @if (_checking)
+        {
+            <div class="gf-cleanup-status gf-dim gf-small">
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" /> Checking @Plural(_names.Count, "branch", "branches")…
+            </div>
+        }
+        else if (_error is { } error)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="my-2">@error</MudAlert>
+        }
+        else if (_rows.Count == 0)
+        {
+            <div class="gf-cleanup-status gf-dim gf-small">Nothing to clean up.</div>
+        }
+        else
+        {
+            <div class="gf-cleanup-list">
+                @Section("Merged", $"Their work is in {MergedInto}.", _rows.Where(r => !r.IsUnmerged && r.Worktree is null).ToList())
+                @Section("Checked out in a worktree", "Deleting one also removes its worktree folder. Only worktrees without uncommitted changes can be removed; files git ignores there, such as build output, are deleted with it.", _rows.Where(r => r.Worktree is not null).ToList())
+                @Section("Not merged", $"They have commits whose changes are not in {_base}. Deleting one loses those commits.", _rows.Where(r => r.IsUnmerged && r.Worktree is null).ToList())
+            </div>
+            <p class="gf-small gf-dim">@Keymap.UndoName(W.Settings) restores deleted branches. Removed worktree folders cannot be restored.</p>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="@(Risky ? Color.Error : Color.Primary)" Variant="Variant.Filled" Disabled="@(_checking || Chosen.Count == 0)" OnClick="DeleteAsync">@ActionLabel</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    private sealed class Row(BranchMergeCheck check, WorktreeInfo? worktree)
+    {
+        public BranchMergeCheck Check { get; } = check;
+        public WorktreeInfo? Worktree { get; } = worktree;
+        public string Name => Check.Branch;
+        public bool IsUnmerged => Check.State == BranchMergeState.Unmerged;
+
+        /// <summary>Why it can't be deleted from here (its worktree has uncommitted changes, is locked, …), or null.</summary>
+        public string? Blocked { get; set; }
+
+        public bool Selected { get; set; }
+
+        /// <summary>Its worktree's folder still exists, so deleting the branch deletes that folder too.</summary>
+        public bool RemovesFolder { get; } = worktree is { IsPrunable: false } w && Directory.Exists(w.Path);
+    }
+
+    private List<string> _names = [];
+    private List<string> _bases = [];
+    private string _base = "HEAD";
+    private List<Row> _rows = [];
+    private bool _checking;
+    private string? _error;
+    private CancellationTokenSource _cts = new();
+
+    private List<Row> Chosen => _rows.Where(r => r.Selected && r.Blocked is null).ToList();
+
+    private bool Risky => Chosen.Any(r => r.IsUnmerged || r.RemovesFolder);
+
+    private string MergedInto => W.CurrentBranch is { } current && current != _base ? $"{_base} or in {current}" : _base;
+
+    private string ActionLabel
+    {
+        get
+        {
+            var chosen = Chosen;
+            var folders = chosen.Count(r => r.RemovesFolder);
+            return chosen.Count == 0 ? "Delete"
+                : $"Delete {Plural(chosen.Count, "branch", "branches")}{(folders > 0 ? $" and {Plural(folders, "worktree", "worktrees")}" : null)}";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _names = W.GoneBranches.Select(b => b.Name).ToList();
+        if (W.Repo is not { } repo || W.Snapshot is not { } snapshot) return;
+
+        var remote = W.DefaultRemote?.Name ?? "origin";
+        var head = await repo.QueryAsync(["symbolic-ref", "--quiet", $"refs/remotes/{remote}/HEAD"]);
+        _bases = BranchCleanup.BaseCandidates(snapshot, head.Succeeded ? BranchCleanup.RemoteDefault(head.StandardOutput) : null, W.CurrentBranch).ToList();
+        if (_bases.Count == 0) _bases.Add("HEAD");
+        _base = _bases[0];
+        await CheckAsync();
+    }
+
+    private async Task SetBaseAsync(ChangeEventArgs e)
+    {
+        _base = e.Value?.ToString() ?? _base;
+        await CheckAsync();
+    }
+
+    private async Task CheckAsync()
+    {
+        if (W.Repo is not { } repo) return;
+        _cts.Cancel();
+        _cts.Dispose();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+        _checking = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var baseRef = _base;
+            var checks = await Task.Run(() => repo.Branches.CheckMergedAsync(_names, baseRef, ct), ct);
+            var worktrees = await repo.Worktrees.ListAsync(ct);
+            var rows = checks.Select(c => new Row(c, worktrees.FirstOrDefault(w => !w.IsCurrent && w.Branch == c.Branch))).ToList();
+            await Task.WhenAll(rows.Where(r => r.Worktree is not null).Select(async r => r.Blocked = await BlockedAsync(repo, r.Worktree!, ct)));
+
+            // Safe ones are ticked; anything that loses commits or deletes a folder is the user's call.
+            foreach (var r in rows) r.Selected = r.Blocked is null && !r.IsUnmerged && !r.RemovesFolder;
+            _rows = rows;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = ex is GitCommandException g ? g.GitMessage : ex.Message;
+            _rows = [];
+        }
+
+        _checking = false;
+        StateHasChanged();
+    }
+
+    private static async Task<string?> BlockedAsync(IGitRepository repo, WorktreeInfo worktree, CancellationToken ct)
+    {
+        if (worktree.IsMain) return "checked out in the main folder";
+        if (worktree.IsLocked) return "worktree is locked";
+        if (worktree.IsPrunable || !Directory.Exists(worktree.Path)) return null;
+        try
+        {
+            return await repo.Worktrees.HasChangesAsync(worktree.Path, ct) ? "uncommitted changes" : null;
+        }
+        catch (GitCommandException)
+        {
+            return "worktree could not be read";
+        }
+    }
+
+    private RenderFragment Section(string title, string note, List<Row> rows) => @<text>
+        @if (rows.Count > 0)
+        {
+            var selectable = rows.Where(r => r.Blocked is null).ToList();
+            var all = selectable.Count > 0 && selectable.All(r => r.Selected);
+            <section class="gf-cleanup-section" aria-label="@title">
+                <div class="gf-cleanup-head">
+                    <span>@title</span><span class="gf-count">@rows.Count</span>
+                    @if (selectable.Count > 1)
+                    {
+                        <button type="button" class="gf-link-button" @onclick="@(() => selectable.ForEach(r => r.Selected = !all))">@(all ? "Select none" : "Select all")</button>
+                    }
+                </div>
+                <div class="gf-cleanup-note gf-small gf-dim">@note</div>
+                @foreach (var row in rows)
+                {
+                    <label class="gf-cleanup-row @(row.Blocked is not null ? "blocked" : null)">
+                        <input type="checkbox" aria-label="@($"Delete {row.Name}")" checked="@(row.Selected && row.Blocked is null)" disabled="@(row.Blocked is not null)" @onchange="@(e => row.Selected = e.Value is true)" />
+                        <span class="gf-cleanup-name gf-ellipsis" title="@row.Name">@row.Name</span>
+                        <span class="gf-small @(row.IsUnmerged ? "gf-danger" : "gf-dim")">@StateText(row)</span>
+                        @if (row.Worktree is { } wt)
+                        {
+                            <span class="gf-cleanup-path gf-ellipsis" title="@wt.Path">
+                                <span class="@(row.Blocked is not null ? "gf-danger" : "gf-dim")">@(row.Blocked is { } why ? $"Kept: {why}" : row.RemovesFolder ? "Removes" : "Folder already deleted:")</span>
+                                <span class="gf-dim">@ShortPath(wt.Path)</span>
+                            </span>
+                        }
+                    </label>
+                }
+            </section>
+        }
+    </text>;
+
+    private string StateText(Row row) => row.Check.State switch
+    {
+        BranchMergeState.Merged => "merged",
+        BranchMergeState.ChangesInBase => "squash or rebase merged",
+        _ => $"{Plural(row.Check.UnmergedCommits, "commit", "commits")} not in {_base}",
+    };
+
+    private async Task DeleteAsync()
+    {
+        var items = Chosen.Select(r => new BranchCleanupItem(r.Name, r.Check.TipSha, r.Worktree)).ToList();
+        if (items.Count == 0) return;
+        Dialog.Close();
+        await W.CleanUpBranchesAsync(items);
+    }
+
+    private static string Plural(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
+
+    /// <summary>The last two folders of a path ("…\DLB-pmcsdonut\digitallogbook"): enough to tell worktrees apart.</summary>
+    internal static string ShortPath(string path)
+    {
+        var parts = path.Replace('/', '\\').TrimEnd('\\').Split('\\');
+        return parts.Length <= 3 ? string.Join('\\', parts) : "…\\" + string.Join('\\', parts[^2..]);
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

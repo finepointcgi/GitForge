@@ -459,40 +459,6 @@ public sealed partial class RepoWorkspace : IAsyncDisposable
         Notify();
     }
 
-    /// <summary>Deletes local branches whose upstream was deleted on the remote. Only fully merged branches are removed (<c>git branch -d</c>).</summary>
-    public Task CleanUpGoneBranchesAsync(IReadOnlyList<string> names) =>
-        RunAsync("Cleaning up branches", async (r, _) =>
-        {
-            var deleted = new List<string>();
-            var unmerged = new List<string>();
-            var failed = new List<string>();
-            foreach (var name in names)
-            {
-                try
-                {
-                    await r.Branches.DeleteAsync(name, force: false); // git branch -d: refuses when commits would be lost
-                    deleted.Add(name);
-                }
-                catch (GitCommandException ex) when (ex.GitMessage.Contains("not fully merged", StringComparison.OrdinalIgnoreCase))
-                {
-                    unmerged.Add(name);
-                }
-                catch (GitCommandException ex)
-                {
-                    failed.Add($"{name} ({ex.GitMessage.Split('\n')[0].Trim()})");
-                }
-            }
-
-            if (deleted.Count > 0) Info($"Deleted {deleted.Count} branch{(deleted.Count == 1 ? string.Empty : "es")}: {string.Join(", ", deleted)}", Severity.Success);
-            if (unmerged.Count > 0)
-            {
-                _snackbar.Add($"Kept {string.Join(", ", unmerged)}: {(unmerged.Count == 1 ? "it has" : "they have")} commits that are not in {CurrentBranch ?? "HEAD"} (common after squash merges). Right-click › Delete › Force delete if you are sure.",
-                    Severity.Warning, o => o.VisibleStateDuration = 12000);
-            }
-
-            if (failed.Count > 0) _snackbar.Add($"Could not delete {string.Join(", ", failed)}", Severity.Error, o => o.VisibleStateDuration = 12000);
-        });
-
     /// <summary>The stash shown in the center pane, tracked by commit SHA because stash indexes shift as stashes come and go.</summary>
     public string? OpenStashSha => _active?.OpenStashSha;
 

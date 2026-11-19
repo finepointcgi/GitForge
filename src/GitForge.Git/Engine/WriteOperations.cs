@@ -227,6 +227,112 @@ internal sealed class BranchOperations(RepoContext ctx) : IBranchOperations
     public Task DeleteAsync(string name, bool force, CancellationToken cancellationToken = default) =>
         ctx.WriteAsync("delete branch", ["branch", force ? "-D" : "-d", Guard(name)], cancellationToken);
 
+    public async Task DeleteIfUnchangedAsync(string name, string expectedTip, CancellationToken cancellationToken = default)
+    {
+        var tip = await CommitShaAsync($"refs/heads/{Guard(name)}", cancellationToken).ConfigureAwait(false)
+                  ?? throw new InvalidOperationException($"{name} no longer exists.");
+        if (!string.Equals(tip, expectedTip, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"{name} has new commits since it was checked, so it was kept.");
+        }
+
+        await ctx.WriteAsync("delete branch", ["branch", "-D", name], cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<BranchMergeCheck>> CheckMergedAsync(IReadOnlyList<string> branches, string baseRef, CancellationToken cancellationToken = default)
+    {
+        var baseSha = await CommitShaAsync(Guard(baseRef), cancellationToken).ConfigureAwait(false)
+                      ?? throw new InvalidOperationException($"{baseRef} was not found. Fetch, or choose another branch to compare with.");
+        var tips = await LocalTipsAsync(cancellationToken).ConfigureAwait(false);
+
+        // Plain merges and fast-forwards, in one pass: branches whose last commit is in the base or in HEAD (what git branch -d accepts).
+        var merged = await MergedIntoAsync(baseSha, cancellationToken).ConfigureAwait(false);
+        if (await CommitShaAsync("HEAD", cancellationToken).ConfigureAwait(false) is { } head && head != baseSha)
+        {
+            merged.UnionWith(await MergedIntoAsync(head, cancellationToken).ConfigureAwait(false));
+        }
+
+        var results = new BranchMergeCheck?[branches.Count];
+        var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 2, 8), CancellationToken = cancellationToken };
+        await Parallel.ForEachAsync(Enumerable.Range(0, branches.Count), options, async (i, ct) =>
+        {
+            var name = branches[i];
+            if (!tips.TryGetValue(name, out var tip)) return;
+            results[i] = merged.Contains(name)
+                ? new BranchMergeCheck(name, tip, BranchMergeState.Merged, 0)
+                : await CheckChangesAsync(name, tip, baseSha, ct).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+        return results.OfType<BranchMergeCheck>().ToList();
+    }
+
+    /// <summary>Not merged by ancestry: are its changes in the base anyway, as rebased or cherry-picked commits, or as one squash commit?</summary>
+    private async Task<BranchMergeCheck> CheckChangesAsync(string name, string tip, string baseSha, CancellationToken ct)
+    {
+        var unmerged = await CountUnpickedAsync(baseSha, tip, ct).ConfigureAwait(false);
+        return unmerged == 0 || await IsSquashMergedAsync(tip, baseSha, ct).ConfigureAwait(false)
+            ? new BranchMergeCheck(name, tip, BranchMergeState.ChangesInBase, 0)
+            : new BranchMergeCheck(name, tip, BranchMergeState.Unmerged, unmerged);
+    }
+
+    /// <summary><c>git cherry</c>: how many of <paramref name="tip"/>'s commits have no commit with the same changes in <paramref name="upstream"/>.</summary>
+    private async Task<int> CountUnpickedAsync(string upstream, string tip, CancellationToken ct)
+    {
+        var r = await ctx.RunAsync(["cherry", upstream, tip], ct).ConfigureAwait(false);
+        return r.EnsureSuccess("cherry").StandardOutput.Split('\n').Count(l => l.StartsWith('+'));
+    }
+
+    /// <summary>
+    /// A squash merge leaves none of the branch's commits in the base, so compare the branch's combined change instead:
+    /// a temporary commit holding everything the branch changed since it forked, matched by <c>git cherry</c>. That commit is
+    /// unsigned, identical on every run, and never referenced, so git discards it in its next cleanup.
+    /// </summary>
+    private async Task<bool> IsSquashMergedAsync(string tip, string baseSha, CancellationToken ct)
+    {
+        var fork = await ctx.RunAsync(["merge-base", baseSha, tip], ct).ConfigureAwait(false);
+        if (!fork.Succeeded) return false; // unrelated histories
+
+        var squash = await ctx.RunAsync(["commit-tree", "--no-gpg-sign", tip + "^{tree}", "-p", fork.StandardOutput.Trim(), "-m", "GitForge squash-merge check"], ct, env: SquashCheckIdentity).ConfigureAwait(false);
+        return await CountUnpickedAsync(baseSha, squash.EnsureSuccess("commit-tree").StandardOutput.Trim(), ct).ConfigureAwait(false) == 0;
+    }
+
+    /// <summary>A fixed author and date: no dependency on the user's identity, and the same object every time.</summary>
+    private static readonly IReadOnlyDictionary<string, string> SquashCheckIdentity = new Dictionary<string, string>
+    {
+        ["GIT_AUTHOR_NAME"] = "GitForge",
+        ["GIT_AUTHOR_EMAIL"] = "gitforge@localhost",
+        ["GIT_AUTHOR_DATE"] = "@0 +0000",
+        ["GIT_COMMITTER_NAME"] = "GitForge",
+        ["GIT_COMMITTER_EMAIL"] = "gitforge@localhost",
+        ["GIT_COMMITTER_DATE"] = "@0 +0000",
+    };
+
+    private async Task<string?> CommitShaAsync(string revision, CancellationToken ct)
+    {
+        var r = await ctx.RunAsync(["rev-parse", "--verify", "--quiet", revision + "^{commit}"], ct).ConfigureAwait(false);
+        return r.Succeeded ? r.StandardOutput.Trim() : null;
+    }
+
+    private async Task<Dictionary<string, string>> LocalTipsAsync(CancellationToken ct)
+    {
+        var r = await ctx.RunAsync(["for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/"], ct).ConfigureAwait(false);
+        var tips = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in r.EnsureSuccess("for-each-ref").StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (line.Split(' ', 2) is [var sha, var refName] && refName.StartsWith("refs/heads/", StringComparison.Ordinal)) tips[refName["refs/heads/".Length..]] = sha;
+        }
+
+        return tips;
+    }
+
+    private async Task<HashSet<string>> MergedIntoAsync(string sha, CancellationToken ct)
+    {
+        var r = await ctx.RunAsync(["for-each-ref", "--format=%(refname)", $"--merged={sha}", "refs/heads/"], ct).ConfigureAwait(false);
+        return r.EnsureSuccess("for-each-ref").StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => l.StartsWith("refs/heads/", StringComparison.Ordinal))
+            .Select(l => l["refs/heads/".Length..])
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
     public Task DeleteRemoteAsync(string remote, string branch, IProgress<string>? progress, CancellationToken cancellationToken = default) =>
         ctx.WriteAsync("delete remote branch", ["push", "--progress", Guard(remote), "--delete", Guard(branch)], cancellationToken, progress: progress);
 
