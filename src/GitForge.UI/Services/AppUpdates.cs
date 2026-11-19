@@ -283,7 +283,10 @@ public sealed class UpdateService(IAppUpdater updater, ISettingsStore settings) 
         && Status is UpdateStatus.Idle or UpdateStatus.UpToDate or UpdateStatus.Failed
         && (settings.Current.LastUpdateCheck is not { } last || now - last >= CheckInterval);
 
-    /// <summary>One automatic pass. Records the time unless an update was found, so the notice returns after a restart.</summary>
+    /// <summary>
+    /// One automatic pass. Records the time only when the feed answered "up to date": a found update should be announced
+    /// again after a restart, and a failed check (offline, VPN not connected yet) is retried on the next hourly pass.
+    /// </summary>
     internal async Task RunAutomaticCheckAsync(DateTimeOffset now, CancellationToken cancellationToken)
     {
         if (!IsAutomaticCheckDue(now)) return;
@@ -294,7 +297,7 @@ public sealed class UpdateService(IAppUpdater updater, ISettingsStore settings) 
             return;
         }
 
-        await settings.UpdateAsync(s => s with { LastUpdateCheck = now }, cancellationToken).ConfigureAwait(false);
+        if (Status == UpdateStatus.UpToDate) await settings.UpdateAsync(s => s with { LastUpdateCheck = now }, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)

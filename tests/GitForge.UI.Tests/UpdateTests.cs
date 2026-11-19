@@ -182,6 +182,23 @@ public class UpdateServiceTests
         Assert.False(found.IsAutomaticCheckDue(now));       // and not re-checked while the update waits
     }
 
+    [Fact]
+    public async Task AutomaticCheck_ThatFails_IsRetriedOnTheNextPass()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var (service, updater, settings) = Create();
+        updater.CheckError = new HttpRequestException("No such host is known.");
+
+        await service.RunAutomaticCheckAsync(now, default);
+        Assert.Equal(UpdateStatus.Failed, service.Status);
+        Assert.Null(settings.Current.LastUpdateCheck); // offline at launch must not skip a day of checks
+        Assert.True(service.IsAutomaticCheckDue(now.AddHours(1)));
+
+        updater.CheckError = null;
+        await service.RunAutomaticCheckAsync(now.AddHours(1), default);
+        Assert.Equal(now.AddHours(1), settings.Current.LastUpdateCheck);
+    }
+
     private sealed class FakeUpdater : IAppUpdater
     {
         public const string Repo = "https://github.com/finepointcgi/GitForge";
