@@ -59,11 +59,20 @@ public sealed class JsonSettingsStore : ISettingsStore, IDisposable
         }
     }
 
-    public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
+    public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default) =>
+        UpdateAsync(_ => settings, cancellationToken);
+
+    /// <summary>
+    /// Applies <paramref name="update"/> to the current settings and writes the result. The read, change, and write happen
+    /// under one lock, so concurrent updates (tab changes, column widths, update checks) never overwrite each other.
+    /// </summary>
+    public async Task UpdateAsync(Func<AppSettings, AppSettings> update, CancellationToken cancellationToken = default)
     {
+        AppSettings settings;
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            settings = update(Current);
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var temp = _path + ".tmp";
             await using (var stream = File.Create(temp))
@@ -71,7 +80,7 @@ public sealed class JsonSettingsStore : ISettingsStore, IDisposable
                 await JsonSerializer.SerializeAsync(stream, settings, JsonOptions, cancellationToken).ConfigureAwait(false);
             }
 
-            File.Move(temp, _path, overwrite: true);
+            await ReplaceAsync(temp, cancellationToken).ConfigureAwait(false);
             Current = settings;
         }
         finally
@@ -82,8 +91,25 @@ public sealed class JsonSettingsStore : ISettingsStore, IDisposable
         Changed?.Invoke(this, settings);
     }
 
-    public Task UpdateAsync(Func<AppSettings, AppSettings> update, CancellationToken cancellationToken = default) =>
-        SaveAsync(update(Current), cancellationToken);
+    /// <summary>
+    /// Moves the new file over settings.json. Windows refuses while another process briefly has the old file open (antivirus
+    /// or the search indexer scanning the previous write), so retry for up to about half a second before giving up.
+    /// </summary>
+    private async Task ReplaceAsync(string temp, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(temp, _path, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 8)
+            {
+                await Task.Delay(15 * attempt, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
 
     public void Dispose() => _gate.Dispose();
 }
