@@ -625,11 +625,11 @@ internal sealed class HistoryOperations(RepoContext ctx) : IHistoryOperations
         var status = GitOutput.ParseBisect(refs.EnsureSuccess("for-each-ref").StandardOutput, log, null);
         if (status.Bad is null || status.Good.Count == 0 || status.FirstBad is not null) return status;
 
-        // Commits between the good ones and the bad one, not counting the bad one itself: what is left to test.
+        // Commits between the good ones and the bad one, not counting the bad one itself: what is left to test. When only
+        // the bad commit remains, it is the first bad one (whatever git printed or logged).
         var count = await ctx.RunAsync(["rev-list", "--count", status.Bad, "--not", .. status.Good], cancellationToken).ConfigureAwait(false);
-        return int.TryParse(count.StandardOutput.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var n)
-            ? status with { Remaining = Math.Max(n - 1, 0) }
-            : status;
+        if (!int.TryParse(count.StandardOutput.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var n)) return status;
+        return n <= 1 ? status with { FirstBad = status.Bad, Remaining = 0 } : status with { Remaining = n - 1 };
     }
 
     private async Task<GitResult> SequencerAsync(string verb, CancellationToken ct)

@@ -231,9 +231,17 @@ public sealed partial class RepoWorkspace
         var session = _active;
         if (session is null) return;
         string? output = null;
-        if (!await RunAsync(label, async (r, _) => output = (await step(r)).StandardOutput) || output is null) return;
+        if (!await RunAsync(label, async (r, _) =>
+            {
+                var result = await step(r);
+                output = $"{result.StandardOutput}\n{result.StandardError}";
+            }) || output is null)
+        {
+            return;
+        }
 
-        if (GitOutput.FirstBadCommit(output) is { } bad)
+        // git names the first bad commit in its output; the refreshed bisect state finds it too, whichever stream it used.
+        if ((GitOutput.FirstBadCommit(output) ?? session.Bisect.FirstBad) is { } bad)
         {
             session.BisectMessage = null;
             SelectCommit(bad, reveal: true);

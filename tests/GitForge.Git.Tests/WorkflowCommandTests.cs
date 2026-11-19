@@ -151,19 +151,23 @@ public class WorkflowCommandTests
         Assert.True(waiting.NeedsGood);
         Assert.Equal(shas[^1], waiting.Bad);
 
-        var output = (await repo.History.MarkBisectAsync(BisectMark.Good, shas[0])).StandardOutput;
+        static string Both(GitResult r) => $"{r.StandardOutput}\n{r.StandardError}";
+        var output = Both(await repo.History.MarkBisectAsync(BisectMark.Good, shas[0]));
         var status = await repo.History.GetBisectStatusAsync();
         Assert.False(status.NeedsGood);
         Assert.Equal(7, status.Remaining); // c2..c8 are left to test
-        for (var steps = 0; GitOutput.FirstBadCommit(output) is null; steps++)
+
+        // Done when git names the first bad commit or the bisect state shows it (git versions differ in how they report it).
+        for (var steps = 0; status.FirstBad is null; steps++)
         {
-            Assert.True(steps < 6, "bisect did not converge");
+            Assert.True(steps < 6, $"bisect did not converge; git said: {output}");
             var bad = File.Exists(Path.Combine(t.Path, "bug.txt"));
-            output = (await repo.History.MarkBisectAsync(bad ? BisectMark.Bad : BisectMark.Good)).StandardOutput;
+            output = Both(await repo.History.MarkBisectAsync(bad ? BisectMark.Bad : BisectMark.Good));
+            status = await repo.History.GetBisectStatusAsync();
         }
 
-        Assert.Equal(shas[5], GitOutput.FirstBadCommit(output));
-        Assert.Equal(shas[5], (await repo.History.GetBisectStatusAsync()).FirstBad);
+        Assert.Equal(shas[5], status.FirstBad);
+        if (GitOutput.FirstBadCommit(output) is { } named) Assert.Equal(shas[5], named);
 
         await repo.History.ResetBisectAsync();
         Assert.Equal(BisectStatus.None, await repo.History.GetBisectStatusAsync());
