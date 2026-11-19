@@ -28,7 +28,10 @@ GitForge ships as a self-contained Windows x64 app packaged with [Velopack](http
    - runs the tests;
    - publishes a self-contained, ReadyToRun build stamped with the tag's version;
    - packs it with vpk, including a delta from the previous release and the release notes (commit subjects since the last tag);
-   - uploads the release, `SHA256SUMS.txt`, and a signed build provenance attestation.
+   - records a signed build provenance attestation for the installers and packages, retrying once if the signing service fails;
+   - uploads the release and `SHA256SUMS.txt`.
+
+   Tests, packing, and the attestation run before anything is published, so when one of them fails there is nothing to clean up: fix the cause (or wait out a service outage) and use **Re-run all jobs** on the run's page.
 
 Tags must be `vMAJOR.MINOR.PATCH`. A suffix (`v0.2.0-beta.1`) publishes a GitHub pre-release, which installed copies ignore.
 
@@ -45,6 +48,13 @@ To confirm a download was built by this repository's workflow, use the GitHub CL
 ```bash
 gh attestation verify GitForge-win-Setup.exe --repo finepointcgi/GitForge
 ```
+
+`releases.win.json` is written during the upload, so it has no attestation; its checksum is taken from the published copy.
+
+Known gaps in earlier releases:
+
+- 0.1.3 has no attestation: the workflow then attested after publishing, and the signing service failed on that step. Check its files against its `SHA256SUMS.txt` instead.
+- In 0.1.1 through 0.1.3, the `releases.win.json` line in `SHA256SUMS.txt` describes the local copy, not the published file (as does its attestation in 0.1.1 and 0.1.2). The other lines describe the files as published.
 
 ## Code signing
 

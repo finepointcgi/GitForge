@@ -84,6 +84,38 @@ jobs:
           if ($pfx) { Remove-Item $pfx -Force }
           exit $code
 
+      # This version's installer, MSI, portable zip, and packages (not the previous release's files). Not releases.win.json:
+      # vpk writes the published copy of that index during the upload, so the local one differs from it.
+      - name: Collect this release's files
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Get-ChildItem releases -File |
+            Where-Object { $_.Name -like 'GitForge-win*' -or $_.Name -like "GitForge-$env:VERSION-*.nupkg" } |
+            Copy-Item -Destination dist
+
+      # Provenance is recorded before anything is published, so a failure here leaves no release behind and the run can
+      # simply be re-run. The signing service (Sigstore) has brief outages, so a failed attempt is retried once.
+      - name: Attest build provenance
+        id: attest
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+      - name: Wait before retrying the attestation
+        if: steps.attest.outcome == 'failure'
+        shell: pwsh
+        run: Start-Sleep -Seconds 60
+
+      - name: Attest build provenance (retry)
+        if: steps.attest.outcome == 'failure'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
       - name: Upload the release
         shell: pwsh
         env:
@@ -97,28 +129,15 @@ jobs:
           dotnet vpk @vpk
           exit $LASTEXITCODE
 
-      # This version's installer, MSI, portable zip, packages, and release index (not the previous release's files).
-      - name: Collect this release's files
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          New-Item -ItemType Directory dist | Out-Null
-          Get-ChildItem releases -File |
-            Where-Object { $_.Name -like 'GitForge-win*' -or $_.Name -like "GitForge-$env:VERSION-*.nupkg" -or $_.Name -eq 'releases.win.json' } |
-            Copy-Item -Destination dist
-
       - name: Upload checksums
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $files = Get-ChildItem dist -File | Sort-Object Name
+          # The release index as published, not the local copy.
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern releases.win.json --dir published
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $files = @(Get-ChildItem dist -File) + @(Get-ChildItem published -File) | Sort-Object Name
           $files | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)" } | Set-Content -Encoding ascii SHA256SUMS.txt
           gh release upload $env:TAG SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --clobber
           exit $LASTEXITCODE
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/*
