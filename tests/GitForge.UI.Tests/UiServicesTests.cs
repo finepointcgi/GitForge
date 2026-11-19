@@ -10,10 +10,14 @@ public class SyntaxHighlighterTests
     [Fact]
     public void CSharp_KeywordsAndStrings_GetDistinctColors()
     {
+        const string line = "public static string Name = \"value\";";
+
+        // The grammar compiles its regular expressions on first use. In a busy parallel test run that can exceed the
+        // per-line time limit, which by design leaves the rest of that line plain. Warm up so the colors below are stable.
+        Highlighter.CreateTokenizer("Program.cs", dark: true)?.Next(line);
+
         var tok = Highlighter.CreateTokenizer("Program.cs", dark: true);
         Assert.NotNull(tok);
-
-        const string line = "public static string Name = \"value\";";
         var spans = tok!.Next(line);
         string? ColorOf(string text) => spans.FirstOrDefault(s => line.Substring(s.Start, s.Length) == text).Color;
 
